@@ -5,6 +5,9 @@ git commands:
 
 git clone https://github.com/navedrizvi/bdh-project
 
+to get your local branch up to date with latest main:
+- git pull origin main
+
 make commits in your workspace folder on `main` branch
 
 ===
@@ -20,3 +23,5 @@ Git commands:
 - git push origin mybranch
 
 Once pushed to the remote mybranch you can go to github and open a PR against main branch
+
+
