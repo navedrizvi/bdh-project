@@ -1,3 +1,4 @@
+import enum
 import json
 from glob import glob
 from typing import Dict, Tuple
@@ -6,19 +7,27 @@ import datetime as dt
 from collections import Counter
 import os
 
-from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoConfig
-import torch
-import numpy as np
-import pandas as pd
 from tqdm.auto import tqdm
+from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoConfig
+import numpy as np
+from numpy.random.mtrand import sample
+import pandas as pd
+import torch
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 PATH = "../data/raw/"
+PATIENTS_PATH = os.path.join(PATH, "PATIENTS.csv.gz")
+
 PATH_PROCESSED = "../data/processed/"
+NOTES_PATH = os.path.join(PATH_PROCESSED, 'SAMPLE_NOTES.csv')
+
 PATH_DATASETS = "../data/train/"
+SENTENCE_TENSOR_PATH = "../data/embeddings/99283.pt"
+EMBEDDING_TEMPLATE = "../data/embeddings/{subj_id}.pt"
+PRETRAINED_MODEL_PATH = 'deepset/covid_bert_base'
 
 SAMPLE_SIZE = 10000
 RANDOM_SEED = 1
@@ -27,26 +36,30 @@ TRAIN_SIZE = 0.8
 OBSERVATION_WINDOW = 2000
 PREDICTION_WINDOW = 50
 
-patients = pd.read_csv(os.path.join(PATH, "PATIENTS.csv.gz"))
-patients.EXPIRE_FLAG.value_counts()
+patients = pd.read_csv(PATIENTS_PATH)
 
 #ensuring every patient is unique
 print(f"{patients.SUBJECT_ID.nunique()} unique patients in {len(patients)} rows")
-#sampling random patients
-patients_sample = patients.sample(n=1000, random_state=RANDOM_SEED)
 
-SAMPLE_IDS = set(patients_sample.SUBJECT_ID)
+def get_patient_dfs():
+    #sampling random patients
+    patients_sample = patients.sample(n=1000, random_state=RANDOM_SEED)
+    sample_ids = set(patients_sample.SUBJECT_ID)
+    # TODO why read-write?
+    with open(os.path.join(PATH_PROCESSED, "SAMPLE_IDS.json"), 'w') as f:
+        json.dump({'ids': list(sample_ids)}, f)
+    with open(os.path.join(PATH_PROCESSED, "SAMPLE_IDS.json"), 'r') as f:
+        sample_ids = set(json.load(f)['ids'])
+    patients_sample = patients[patients.SUBJECT_ID.isin(sample_ids)]
+    # Moratality set
+    deceased_to_date = patients_sample[patients_sample.EXPIRE_FLAG == 1] \
+        .set_index('SUBJECT_ID').DOD.map(lambda x: pd.to_datetime(x).date()).to_dict()
 
-with open(os.path.join(PATH_PROCESSED, "SAMPLE_IDS.json"), 'w') as f:
-    json.dump({'ids': list(SAMPLE_IDS)}, f)
-    
-with open(os.path.join(PATH_PROCESSED, "SAMPLE_IDS.json"), 'r') as f:
-    SAMPLE_IDS = set(json.load(f)['ids'])
+    return patients_sample, sample_ids, deceased_to_date
 
-patients_sample = patients[patients.SUBJECT_ID.isin(SAMPLE_IDS)]
 
-DECEASED_TO_DATE = patients_sample[patients_sample.EXPIRE_FLAG == 1] \
-    .set_index('SUBJECT_ID').DOD.map(lambda x: pd.to_datetime(x).date()).to_dict()
+
+## TODO Feature engr. helpers
 
 def get_data_for_sample(sample_ids: set,
                         file_name: str,
@@ -66,21 +79,13 @@ def find_mean_dose(dose: str) -> float:
     except:
         print(dose)
 
-def get_notes(sample_ids: set = None,
-              note_path: str = "NOTEEVENTS.csv.gz",
-              chunksize: int = 10_000) -> pd.DataFrame:
-    """Get all notes or only those relevant for the sample."""
-    if sample_ids is None:
-        return pd.read_csv(os.path.join(PATH, note_path))
-    return get_data_for_sample(sample_ids, note_path, chunksize)
-
-def clean_text(note: str):
+def clean_text(note: str) -> str:
     cleaned = re.sub(r'[^\w]', ' ', note).replace("_", " ")
     removed_spaces = re.sub(' +', ' ', cleaned)
     lower = removed_spaces.lower()
     return lower
 
-def define_train_period(*feature_sets, 
+def define_train_period(deceased_to_date, *feature_sets, 
                         obs_w: int = OBSERVATION_WINDOW, 
                         pred_w: int = PREDICTION_WINDOW) -> Tuple[Dict, Dict]:
     """Create SUBJECT_ID -> earliest_date and SUBJECT_ID -> last date dicts."""
@@ -89,22 +94,15 @@ def define_train_period(*feature_sets,
     last_date_base = all_feats.groupby('SUBJECT_ID').DATE.max().to_dict()
     last_date = {subj_id: date
                  for subj_id, date in last_date_base.items()
-                 if subj_id not in DECEASED_TO_DATE}
+                 if subj_id not in deceased_to_date}
     subtracted_pred_w = {subj_id: date - dt.timedelta(days=pred_w)
-                         for subj_id, date in DECEASED_TO_DATE.items()}
+                         for subj_id, date in deceased_to_date.items()}
     last_date.update(subtracted_pred_w)
     earliest_date = {subj_id: date - dt.timedelta(days=obs_w)
                      for subj_id, date in last_date.items()}
     return earliest_date, last_date
 
-def clean_up_feature_sets(*feature_sets, earliest_date: dict, last_date: dict) -> list:
-    """Leave only features from inside the observation window."""
-    results = []
-    for feats in feature_sets:
-        results.append(feats[(feats.DATE < feats.SUBJECT_ID.map(last_date))
-                             & (feats.DATE >= feats.SUBJECT_ID.map(earliest_date))])
-    return results
-
+# TODO ETL
 def build_feats(df: pd.DataFrame, agg: list, train_ids: list = None, low_thresh: int = None) -> pd.DataFrame:
     """Build feature aggregations for patient.
     
@@ -133,6 +131,7 @@ def build_feats(df: pd.DataFrame, agg: list, train_ids: list = None, low_thresh:
     grouped = df.groupby(cols_to_use).agg(agg)
     return grouped
 
+# Vis. helper
 def pivot_aggregation(df: pd.DataFrame, fill_value = None, use_sparse: bool = True) -> pd.DataFrame:
     """Make sparse pivoted table with SUBJECT_ID as index."""
     pivoted = df.unstack()
@@ -145,12 +144,25 @@ def pivot_aggregation(df: pd.DataFrame, fill_value = None, use_sparse: bool = Tr
     pivoted.columns = [f"{col[-1]}_{col[1]}" for col in pivoted.columns]
     return pivoted
 
+
+## Model training helpers
+
+#TODO ETL
+def clean_up_feature_sets(*feature_sets, earliest_date: dict, last_date: dict) -> list:
+    """Leave only features from inside the observation window."""
+    results = []
+    for feats in feature_sets:
+        results.append(feats[(feats.DATE < feats.SUBJECT_ID.map(last_date))
+                             & (feats.DATE >= feats.SUBJECT_ID.map(earliest_date))])
+    return results
+
 def train_and_predict(df: pd.DataFrame, target: pd.Series, train_loc: pd.Series, classifier) -> np.array:
-    classifier.fit(df_final[train_loc], target[train_loc])
-    pred = classifier.predict_proba(df_final[~train_loc])[:, 1]
+    classifier.fit(df[train_loc], target[train_loc])
+    pred = classifier.predict_proba(df[~train_loc])[:, 1]
     return pred
 
-def prepare_text_for_tokenizer(text: str):
+#TODO ETL
+def prepare_text_for_tokenizer(text: str) -> str:
     cleaned = ('. ').join(text.splitlines())
     removed_symbols = re.sub('[\[\]\*\_#:?!]+', ' ', cleaned)
     removed_spaces = re.sub(' +', ' ', removed_symbols)
@@ -181,7 +193,7 @@ def save_embedding(last_note, tokenizer, model):
         text = row['TO_TOK']
         subj_id = row['SUBJECT_ID']
         embedding = get_vector_for_text(text, tokenizer, model)
-        torch.save(embedding, f"../data/embeddings/{subj_id}.pt")
+        torch.save(embedding, EMBEDDING_TEMPLATE.format(subj_id=subj_id))
 
 def get_saved_embeddings():
     subj_ids = []
@@ -194,16 +206,15 @@ def get_saved_embeddings():
         embeddings.append(np.array(embedding))
     return subj_ids, embeddings
 
-def main():
-    # ### Build features
-    # All features in feature_prepocessed form are features with columns ['SUBJECT_ID', 'FEATURE_NAME', 'DATE', 'VALUE], which can be later used for any of the aggregations we'd like.
-    admissions = get_data_for_sample(SAMPLE_IDS, "ADMISSIONS.csv.gz")
-    admissions['ADMITTIME'] = pd.to_datetime(admissions.ADMITTIME).dt.date
-    diagnoses = get_data_for_sample(SAMPLE_IDS, "DIAGNOSES_ICD.csv.gz")
-    lab_results = get_data_for_sample(SAMPLE_IDS, "LABEVENTS.csv.gz", chunksize=100_000)
-    meds = get_data_for_sample(SAMPLE_IDS, "PRESCRIPTIONS.csv.gz")
+def etl(sample_ids):
+    admissions = get_data_for_sample(sample_ids, "ADMISSIONS.csv.gz")
+    diagnoses = get_data_for_sample(sample_ids, "DIAGNOSES_ICD.csv.gz")
+    lab_results = get_data_for_sample(sample_ids, "LABEVENTS.csv.gz", chunksize=100_000)
+    meds = get_data_for_sample(sample_ids, "PRESCRIPTIONS.csv.gz")
 
-    # #### Diagnoses
+    admissions['ADMITTIME'] = pd.to_datetime(admissions.ADMITTIME).dt.date
+
+    #### Diagnoses
     diagnoses['ICD9_CODE'] = "ICD9_" + diagnoses['ICD9_CODE']
     adm_cols = ['SUBJECT_ID', 'HADM_ID', 'ADMITTIME']
     diagnoses = diagnoses.merge(admissions[adm_cols], on=['SUBJECT_ID', 'HADM_ID'])
@@ -212,13 +223,13 @@ def main():
     diag_preprocessed = diagnoses.drop(columns=dropper).rename(columns=renamer)
     diag_preprocessed['VALUE'] = 1
 
-    # #### Labs
+    #### Labs
     lab_results['DATE'] = pd.to_datetime(lab_results['CHARTTIME']).dt.date
     lab_results['FEATURE_NAME'] = "LAB_" + lab_results['ITEMID'].astype(str)
     dropper = ['ROW_ID', 'HADM_ID', 'VALUE', 'VALUEUOM', 'FLAG', 'ITEMID', 'CHARTTIME']
     lab_preprocessed = lab_results.drop(columns=dropper)
 
-    # #### Meds
+    #### Meds
     meds = meds[meds.ENDDATE.notna()]
     meds['DATE'] = pd.to_datetime(meds['ENDDATE']).dt.date
     meds['VALUE'] = meds['DOSE_VAL_RX'].map(find_mean_dose)
@@ -226,21 +237,49 @@ def main():
     dropper = [col for col in meds.columns if col not in {'SUBJECT_ID', 'DATE', 'FEATURE_NAME', 'VALUE'}]
     meds_preprocessed = meds.drop(columns=dropper).rename(columns=renamer)
 
-    # #### Notes
+    return diag_preprocessed, lab_preprocessed, meds_preprocessed
+
+def get_featureset():
     # Here we can preprocess notes. Later the same things can be done using Spark.
-    notes = pd.read_csv(os.path.join(PATH_PROCESSED, 'SAMPLE_NOTES.csv'))
+    #### Notes
+    notes = pd.read_csv(NOTES_PATH)
     notes['DATE'] = pd.to_datetime(notes['CHARTDATE']).dt.date
     notes['CLEAN_TEXT'] = notes['TEXT'].map(clean_text)
 
-    # ### Feature construction
+    return notes
+
+# TODO calculate summary stats for data to ensure quality (asserts, can be approx)
+
+class ModelType(enum.Enum):
+    Baseline = 'Baseline'
+    TF_IDF = 'TF_IDF'
+    Embeddings = 'Embeddings'
+
+def train_model(model_type: ModelType, df: pd.DataFrame, train_ids: list, target: pd.Series):
+    train_loc = df.index.isin(train_ids)
+    cl = RandomForestClassifier(random_state=RANDOM_SEED)
+    pred = train_and_predict(df, target, train_loc, cl)
+    print(f'Roc score RandomForestClassifier {model_type.value}: {roc_auc_score(target[~train_loc], pred)}')
+    feature_importances = pd.Series(cl.feature_importances_, index=df.columns).sort_values(ascending=False).iloc[:10]
+    print(f'Feature importances  {model_type.value}: {feature_importances}\n')
+
+
+def main():
+    patients_sample, sample_ids, deceased_to_date = get_patient_dfs()
+    diag_preprocessed, lab_preprocessed, meds_preprocessed = etl(sample_ids)
+    notes = get_featureset()
+
+    # All features in feature_prepocessed form are features with columns ['SUBJECT_ID', 'FEATURE_NAME', 'DATE', 'VALUE], which can be later used for any of the aggregations we'd like.
+    ### Build features
+    ### Feature construction
     use_feature_sets = [diag_preprocessed, lab_preprocessed, meds_preprocessed]
-    earliest_date, last_date = define_train_period(*use_feature_sets)
+    earliest_date, last_date = define_train_period(deceased_to_date, *use_feature_sets)
     diag, lab, med = clean_up_feature_sets(*use_feature_sets, earliest_date=earliest_date, last_date=last_date)
 
-    # #### Feat calculations
+    #### Feat calculations
     # We are going to do a train test split based on patients to validate our model. We will only use those features that appear in the train set. Also, we will only use features that are shared between many patients (we will define "many" manually for each of the feature sets).  
     # This way we will lose some patients who don't have "popular" features, but that's fine since our goal is to compare similar patients, not to train the best model.
-    train_ids, test_ids = train_test_split(list(SAMPLE_IDS), train_size=TRAIN_SIZE, random_state=RANDOM_SEED)
+    train_ids, test_ids = train_test_split(list(sample_ids), train_size=TRAIN_SIZE, random_state=RANDOM_SEED)
     diag_built = build_feats(diag, agg=[lambda x: x.sum() > 0], train_ids=train_ids, low_thresh=30)
     diag_final = pivot_aggregation(diag_built, fill_value=0)
     labs_built = build_feats(lab, agg=['mean', 'max', 'min'], train_ids=train_ids, low_thresh=50)
@@ -248,66 +287,56 @@ def main():
     meds_built = build_feats(med, agg=['mean', 'count'], train_ids=train_ids, low_thresh=50)
     meds_final = pivot_aggregation(meds_built, fill_value=0)
 
-    # ### Model Training
+    ### Model Training
     # We will use random forest to automatically incorporate feature interrelations into our model.
     feats_to_train_on = [diag_final, meds_final, labs_final]
     df_final = pd.concat(feats_to_train_on, axis=1).fillna(0)
-    target = pd.Series(df_final.index.isin(DECEASED_TO_DATE), index=df_final.index, name='target')
-    target.value_counts()
-    train_loc = df_final.index.isin(train_ids)
-    cl = RandomForestClassifier(random_state=RANDOM_SEED)
-    pred = train_and_predict(df_final, target, train_loc, cl)
-    roc_auc_score(target[~train_loc], pred)
-    pd.Series(cl.feature_importances_, index=df_final.columns).sort_values(ascending=False).iloc[:10]
+    target = pd.Series(df_final.index.isin(deceased_to_date), index=df_final.index, name='target')
 
-    # ### Add note TF-IDF
+    train_model(ModelType.Baseline, df_final, train_ids, target)
+
+    ### Add note TF-IDF
     last_note = clean_up_feature_sets(notes, earliest_date=earliest_date, last_date=last_date)[0]
     cols = ['SUBJECT_ID', 'DATE', 'CLEAN_TEXT']
     last_note = last_note.sort_values(by=cols, ascending=False).drop_duplicates('SUBJECT_ID')[cols]
-    last_note = last_note[last_note.SUBJECT_ID.isin(SAMPLE_IDS)]
+    last_note = last_note[last_note.SUBJECT_ID.isin(sample_ids)]
 
     vectorizer = TfidfVectorizer(max_features=200)
     tf_idf = vectorizer.fit_transform(last_note.CLEAN_TEXT)
-    cols = [f"TFIDF_{feat}" for feat in vectorizer.get_feature_names()]
+    cols = [f'TFIDF_{feat}' for feat in vectorizer.get_feature_names()]
     tf_idf_feats = pd.DataFrame.sparse.from_spmatrix(tf_idf, columns=cols, index=last_note.SUBJECT_ID)
 
-
-    # #### Training
+    #### Training again
     # making sure no new rows are added
     feats_to_train_on = [diag_final, meds_final, labs_final]
     df_final = pd.concat(feats_to_train_on, axis=1).fillna(0)
     tf_idf_feats = tf_idf_feats[tf_idf_feats.index.isin(df_final.index)]
     feats_to_train_on = [diag_final, meds_final, labs_final, tf_idf_feats]
     df_final = pd.concat(feats_to_train_on, axis=1).fillna(0)
-    target = pd.Series(df_final.index.isin(DECEASED_TO_DATE), index=df_final.index, name='target')
-    target.value_counts()
+    target = pd.Series(df_final.index.isin(deceased_to_date), index=df_final.index, name='target')
 
-    cl = RandomForestClassifier(random_state=RANDOM_SEED)
-    train_loc = df_final.index.isin(train_ids)
-    pred = train_and_predict(df_final, target, train_loc, cl)
-    roc_auc_score(target[~train_loc], pred)
-    pd.Series(cl.feature_importances_, index=df_final.columns).sort_values(ascending=False).iloc[:10]
+    train_model(ModelType.TF_IDF, df_final, train_ids, target)
+
     # Better results, mostly from getting patient discharge information from notes.
 
-    # ### Add transformer embeddings
+    ### Add transformer embeddings
     last_note = clean_up_feature_sets(notes, earliest_date=earliest_date, last_date=last_date)[0]
     cols = ['SUBJECT_ID', 'DATE', 'TEXT']
     last_note = last_note.sort_values(by=cols, ascending=False).drop_duplicates('SUBJECT_ID')[cols]
-    last_note = last_note[last_note.SUBJECT_ID.isin(SAMPLE_IDS)]
-    prepare_text_for_tokenizer(last_note['TEXT'].iloc[0])
+    last_note = last_note[last_note.SUBJECT_ID.isin(sample_ids)]
     last_note['TO_TOK'] = last_note.TEXT.map(prepare_text_for_tokenizer)
     last_note = last_note.reset_index(drop=True)
 
+    config = AutoConfig.from_pretrained(PRETRAINED_MODEL_PATH, output_hidden_states=True, output_attentions=True)
+    model = AutoModelForMaskedLM.from_pretrained(PRETRAINED_MODEL_PATH, config=config)
 
-    config = AutoConfig.from_pretrained('deepset/covid_bert_base', output_hidden_states=True, output_attentions=True)
-    model = AutoModelForMaskedLM.from_pretrained("deepset/covid_bert_base", config=config)
+    # why? TODO
     model.eval()
 
-    tokenizer = AutoTokenizer.from_pretrained("deepset/covid_bert_base")
+    tokenizer = AutoTokenizer.from_pretrained(PRETRAINED_MODEL_PATH)
     sentence = get_vector_for_text(last_note.TO_TOK.iloc[0], tokenizer, model)
 
-    torch.save(sentence, "../data/embeddings/99283.pt")
-
+    torch.save(sentence, SENTENCE_TENSOR_PATH)
     save_embedding(last_note, tokenizer, model)
 
     subj_ids, embeds = get_saved_embeddings()
@@ -315,17 +344,13 @@ def main():
     embed_df = pd.DataFrame(embeds, index=subj_ids)
     embed_df.columns = [f"EMBED_{i}" for i in embed_df.columns]
 
-    # #### Training with embeds
+    #### Training with embeds
     # making sure no new rows are added
     feats_to_train_on = [diag_final, meds_final, labs_final]
     df_final = pd.concat(feats_to_train_on, axis=1).fillna(0)
     embed_df = embed_df[embed_df.index.isin(df_final.index)]
     feats_to_train_on = [diag_final, meds_final, labs_final, embed_df]
     df_final = pd.concat(feats_to_train_on, axis=1).fillna(0)
-    target = pd.Series(df_final.index.isin(DECEASED_TO_DATE), index=df_final.index, name='target')
-    target.value_counts()
-    cl = RandomForestClassifier(random_state=RANDOM_SEED)
-    train_loc = df_final.index.isin(train_ids)
-    pred = train_and_predict(df_final, target, train_loc, cl)
-    roc_auc_score(target[~train_loc], pred)
-    pd.Series(cl.feature_importances_, index=df_final.columns).sort_values(ascending=False).iloc[:10]
+    target = pd.Series(df_final.index.isin(deceased_to_date), index=df_final.index, name='target')
+
+    train_model(ModelType.Embeddings, df_final, train_ids, target)
