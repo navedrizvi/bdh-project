@@ -60,6 +60,7 @@ def _get_data_for_sample(sample_ids: set,
     iterator = pd.read_csv(full_path, iterator=True, chunksize=chunksize)
     return pd.concat([chunk[chunk.SUBJECT_ID.isin(sample_ids)] for chunk in tqdm(iterator)])
 
+
 def _find_mean_dose(dose: str) -> float:
     if pd.isnull(dose):
         return 0
@@ -70,11 +71,13 @@ def _find_mean_dose(dose: str) -> float:
     except:
         print(dose)
 
+
 def _clean_text(note: str) -> str:
     cleaned = re.sub(r'[^\w]', ' ', note).replace("_", " ")
     removed_spaces = re.sub(' +', ' ', cleaned)
     lower = removed_spaces.lower()
     return lower
+
 
 def preprocess(sample_ids: set) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     ''' Returns preprocessed dfs containg records for @sample_ids '''
@@ -122,9 +125,10 @@ def preprocess(sample_ids: set) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFram
 ####### QA
 #ensuring every patient is unique
 # print(f"{patients.SUBJECT_ID.nunique()} unique patients in {len(patients)} rows")
-# TODO calculate summary stats for data to ensure quality (asserts, can be approx)
+# TODO (add more form nb) calculate summary stats for data to ensure quality (asserts, can be approx)
 # print(f"{patients.SUBJECT_ID.nunique()} unique patients in {len(patients)} rows")
 ###########
+
 
 ## Feature engr. helpers
 def define_train_period(deceased_to_date: pd.Series, *feature_sets: List[pd.DataFrame], 
@@ -223,6 +227,7 @@ def pivot_aggregation(df: pd.DataFrame, fill_value: int = None, use_sparse: bool
     pivoted.columns = [f"{col[-1]}_{col[1]}" for col in pivoted.columns]
     return pivoted
 
+
 # TODO 4 cleanup for TF-IDF lemmatise, remove stopwords
 
 # TODO 4 need to do in spark somehow
@@ -253,6 +258,7 @@ def main():
     last_note_tokenized = get_last_note(patient_sample_ids, notes_preprocessed, earliest_date, last_date, as_tokenized=True)
 
     # All features in feature_prepocessed form are features with columns ['SUBJECT_ID', 'FEATURE_NAME', 'DATE', 'VALUE], which can be later used for any of the aggregations we'd like.
+
     ### Feature construction
     # We are going to do a train test split based on patients to validate our model. We will only use those features that appear in the train set. Also, we will only use features that are shared between many patients (we will define "many" manually for each of the feature sets).  
     # This way we will lose some patients who don't have "popular" features, but that's fine since our goal is to compare similar patients, not to train the best model.
