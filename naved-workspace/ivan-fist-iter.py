@@ -17,6 +17,8 @@ from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
+
+#TODO cant import rn...
 from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoConfig
 
 RAW_BASE_PATH = "../data/raw/"
@@ -25,6 +27,7 @@ DIAGNOSES_FNAME = "DIAGNOSES_ICD.csv.gz"
 LABEVENTS_FNAME = "LABEVENTS.csv.gz"
 PRESCRIPTIONS_FNAME = "PRESCRIPTIONS.csv.gz"
 PATIENTS_FNAME = "PATIENTS.csv.gz"
+PATIENTS_PATH = os.path.join(RAW_BASE_PATH, PATIENTS_FNAME)
 
 PATH_PROCESSED = "../data/processed/"
 NOTES_PATH = os.path.join(PATH_PROCESSED, 'SAMPLE_NOTES.csv')
@@ -41,7 +44,6 @@ TRAIN_SIZE = 0.8
 OBSERVATION_WINDOW = 2000
 PREDICTION_WINDOW = 50
 
-patients = pd.read_csv(os.path.join(RAW_BASE_PATH, PATIENTS_FNAME))
 
 
 class ModelType(enum.Enum):
@@ -120,6 +122,7 @@ def get_saved_embeddings() -> Tuple[List[int], List[np.array]]:
 #################
 
 def get_patient_sample() -> Tuple[set, pd.Series, pd.Series]:
+    patients = pd.read_csv(PATIENTS_PATH)
     #sampling random patients
     patients_sample = patients.sample(n=1000, random_state=RANDOM_SEED)
     sample_ids = set(patients_sample.SUBJECT_ID)
@@ -247,8 +250,9 @@ def prepare_text_for_tokenizer(text: str) -> str:
 
 
 
-#TODO ETL
+#TODO ETL : to optimize
 def preprocess(sample_ids: set) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    ''' Returns preprocessed dfs containg records for @sample_ids '''
     admissions = get_data_for_sample(sample_ids, ADMISSIONS_FNAME)
     diagnoses = get_data_for_sample(sample_ids, DIAGNOSES_FNAME)
     lab_results = get_data_for_sample(sample_ids, LABEVENTS_FNAME, chunksize=100_000)
