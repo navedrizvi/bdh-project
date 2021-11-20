@@ -44,6 +44,81 @@ PREDICTION_WINDOW = 50
 patients = pd.read_csv(os.path.join(RAW_BASE_PATH, PATIENTS_FNAME))
 
 
+class ModelType(enum.Enum):
+    Baseline = 'Baseline'
+    TF_IDF = 'TF_IDF'
+    Embeddings = 'Embeddings'
+
+######################### ML STUFF
+# common ML
+def get_training_and_target(deceased_to_date: pd.Series, *feats_to_train_on: List[pd.DataFrame], is_baseline = False, improved_df = None) -> Tuple[pd.DataFrame, pd.Series]:
+    feats_to_train_on = [*feats_to_train_on]
+    if is_baseline:
+        df_final = pd.concat(feats_to_train_on, axis=1).fillna(0)
+        target = pd.Series(df_final.index.isin(deceased_to_date), index=df_final.index, name='target')
+        return df_final, target
+    if improved_df is None:
+        raise ValueError('should specify @improved_df if this is not a baseline model')
+    df_final = pd.concat(feats_to_train_on, axis=1).fillna(0)
+    improved_df = improved_df[improved_df.index.isin(df_final.index)]
+    feats_to_train_on = [*feats_to_train_on, improved_df]
+    df_final = pd.concat(feats_to_train_on, axis=1).fillna(0)
+    target = pd.Series(df_final.index.isin(deceased_to_date), index=df_final.index, name='target')
+    return df_final, target
+
+def _train_and_predict(df: pd.DataFrame, target: pd.Series, train_loc: pd.Series, classifier) -> np.array:
+    classifier.fit(df[train_loc], target[train_loc])
+    pred = classifier.predict_proba(df[~train_loc])[:, 1]
+    return pred
+
+def train_cl_model(model_type: ModelType, df: pd.DataFrame, train_ids: list, target: pd.Series) -> None:
+    train_loc = df.index.isin(train_ids)
+    cl = RandomForestClassifier(random_state=RANDOM_SEED)
+    pred = _train_and_predict(df, target, train_loc, cl)
+    print(f'Roc score RandomForestClassifier {model_type.value}: {roc_auc_score(target[~train_loc], pred)}')
+    feature_importances = pd.Series(cl.feature_importances_, index=df.columns).sort_values(ascending=False).iloc[:10]
+    print(f'Feature importances  {model_type.value}: {feature_importances}\n')
+
+# embedding ML
+
+# TODO TODO refactor this to work on batches of notess
+def get_vector_for_text(text: str, tokenizer: AutoTokenizer, model: AutoModelForMaskedLM) -> torch.Tensor:
+    """This is ugly and slow."""
+    encoding = tokenizer(text, 
+                        add_special_tokens=True, 
+                        truncation=True, 
+                        padding="max_length", 
+                        return_attention_mask=True, 
+                        return_tensors="pt")
+    with torch.no_grad():
+        outputs = model(**encoding)
+        hs = outputs.hidden_states
+        token_embeddings = torch.stack(hs, dim=0)
+        token_embeddings = torch.squeeze(token_embeddings, dim=1)
+        token_embeddings = token_embeddings.permute(1,0,2)
+        token_vecs = hs[-2][0]
+        text_embedding = torch.mean(token_vecs, dim=0)
+        return text_embedding
+
+def save_embedding(last_note, tokenizer: AutoTokenizer, model: AutoModelForMaskedLM) -> None:
+    for row_num, row in tqdm(last_note.iloc[0:].iterrows()):
+        text = row['TO_TOK']
+        subj_id = row['SUBJECT_ID']
+        embedding = get_vector_for_text(text, tokenizer, model)
+        torch.save(embedding, EMBEDDING_TEMPLATE.format(subj_id=subj_id))
+
+def get_saved_embeddings() -> Tuple[List[int], List[np.array]]:
+    subj_ids = []
+    embeddings = []
+    for file in tqdm(glob(os.path.join(EMBEDDINGS_BASE_PATH, '*'))):
+        name = file.split('/')[-1]
+        subj_id = int(name.split('.')[0])
+        embedding = torch.load(file)
+        subj_ids.append(subj_id)
+        embeddings.append(np.array(embedding))
+    return subj_ids, embeddings
+#################
+
 def get_patient_sample() -> Tuple[set, pd.Series, pd.Series]:
     #sampling random patients
     patients_sample = patients.sample(n=1000, random_state=RANDOM_SEED)
@@ -156,10 +231,7 @@ def clean_up_feature_sets(*feature_sets: List[pd.DataFrame], earliest_date: dict
                              & (feats.DATE >= feats.SUBJECT_ID.map(earliest_date))])
     return results
 
-def train_and_predict(df: pd.DataFrame, target: pd.Series, train_loc: pd.Series, classifier) -> np.array:
-    classifier.fit(df[train_loc], target[train_loc])
-    pred = classifier.predict_proba(df[~train_loc])[:, 1]
-    return pred
+
 
 #TODO ETL
 def prepare_text_for_tokenizer(text: str) -> str:
@@ -170,41 +242,10 @@ def prepare_text_for_tokenizer(text: str) -> str:
     removed_duplicated_dots = re.sub('\.+', '.', removed_dots)
     return removed_duplicated_dots
 
-def get_vector_for_text(text: str, tokenizer: AutoTokenizer, model: AutoModelForMaskedLM) -> torch.Tensor:
-    """This is ugly and slow."""
-    encoding = tokenizer(text, 
-                        add_special_tokens=True, 
-                        truncation=True, 
-                        padding="max_length", 
-                        return_attention_mask=True, 
-                        return_tensors="pt")
-    with torch.no_grad():
-        outputs = model(**encoding)
-        hs = outputs.hidden_states
-        token_embeddings = torch.stack(hs, dim=0)
-        token_embeddings = torch.squeeze(token_embeddings, dim=1)
-        token_embeddings = token_embeddings.permute(1,0,2)
-        token_vecs = hs[-2][0]
-        text_embedding = torch.mean(token_vecs, dim=0)
-        return text_embedding
 
-def save_embedding(last_note, tokenizer: AutoTokenizer, model: AutoModelForMaskedLM) -> None:
-    for row_num, row in tqdm(last_note.iloc[0:].iterrows()):
-        text = row['TO_TOK']
-        subj_id = row['SUBJECT_ID']
-        embedding = get_vector_for_text(text, tokenizer, model)
-        torch.save(embedding, EMBEDDING_TEMPLATE.format(subj_id=subj_id))
 
-def get_saved_embeddings() -> Tuple[List[int], List[np.array]]:
-    subj_ids = []
-    embeddings = []
-    for file in tqdm(glob(os.path.join(EMBEDDINGS_BASE_PATH, '*'))):
-        name = file.split('/')[-1]
-        subj_id = int(name.split('.')[0])
-        embedding = torch.load(file)
-        subj_ids.append(subj_id)
-        embeddings.append(np.array(embedding))
-    return subj_ids, embeddings
+
+
 
 #TODO ETL
 def preprocess(sample_ids: set) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -249,33 +290,8 @@ def preprocess(sample_ids: set) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFram
 # TODO calculate summary stats for data to ensure quality (asserts, can be approx)
 # print(f"{patients.SUBJECT_ID.nunique()} unique patients in {len(patients)} rows")
 
-class ModelType(enum.Enum):
-    Baseline = 'Baseline'
-    TF_IDF = 'TF_IDF'
-    Embeddings = 'Embeddings'
 
-def train_cl_model(model_type: ModelType, df: pd.DataFrame, train_ids: list, target: pd.Series) -> None:
-    train_loc = df.index.isin(train_ids)
-    cl = RandomForestClassifier(random_state=RANDOM_SEED)
-    pred = train_and_predict(df, target, train_loc, cl)
-    print(f'Roc score RandomForestClassifier {model_type.value}: {roc_auc_score(target[~train_loc], pred)}')
-    feature_importances = pd.Series(cl.feature_importances_, index=df.columns).sort_values(ascending=False).iloc[:10]
-    print(f'Feature importances  {model_type.value}: {feature_importances}\n')
 
-def get_training_and_target(deceased_to_date: pd.Series, *feats_to_train_on: List[pd.DataFrame], is_baseline = False, improved_df = None) -> Tuple[pd.DataFrame, pd.Series]:
-    feats_to_train_on = [*feats_to_train_on]
-    if is_baseline:
-        df_final = pd.concat(feats_to_train_on, axis=1).fillna(0)
-        target = pd.Series(df_final.index.isin(deceased_to_date), index=df_final.index, name='target')
-        return df_final, target
-    if improved_df is None:
-        raise ValueError('should specify @improved_df if this is not a baseline model')
-    df_final = pd.concat(feats_to_train_on, axis=1).fillna(0)
-    improved_df = improved_df[improved_df.index.isin(df_final.index)]
-    feats_to_train_on = [*feats_to_train_on, improved_df]
-    df_final = pd.concat(feats_to_train_on, axis=1).fillna(0)
-    target = pd.Series(df_final.index.isin(deceased_to_date), index=df_final.index, name='target')
-    return df_final, target
 
 def get_last_note(sample_ids: set, notes_preprocessed: pd.DataFrame, earliest_date: Dict, last_date: Dict, as_tokenized=False):
     if as_tokenized:
@@ -293,17 +309,39 @@ def get_last_note(sample_ids: set, notes_preprocessed: pd.DataFrame, earliest_da
  
     return last_note
 
+def get_tf_idf_feats(last_note: pd.DataFrame) -> pd.DataFrame:
+    vectorizer = TfidfVectorizer(max_features=200)
+    tf_idf = vectorizer.fit_transform(last_note.CLEAN_TEXT)
+    select_cols = [f'TFIDF_{feat}' for feat in vectorizer.get_feature_names()]
+
+    tf_idf_feats = pd.DataFrame.sparse.from_spmatrix(tf_idf, columns=select_cols, index=last_note.SUBJECT_ID)
+    return tf_idf_feats
+
+
+
+
+
+
+
 def main():
-    sample_ids, patients_sample, deceased_to_date = get_patient_sample()
-    diag_preprocessed, lab_preprocessed, meds_preprocessed, notes_preprocessed = preprocess(sample_ids)
+    # Get patient sample
+    patient_sample_ids, patients_sample, deceased_to_date = get_patient_sample()
+    diag_preprocessed, lab_preprocessed, meds_preprocessed, notes_preprocessed = preprocess(patient_sample_ids)
+    use_feature_sets = [diag_preprocessed, lab_preprocessed, meds_preprocessed]
+    earliest_date, last_date = define_train_period(deceased_to_date, *use_feature_sets)
+
+    ### Add note TF-IDF
+    # Choose last note for each patient
+    last_note = get_last_note(patient_sample_ids, notes_preprocessed, earliest_date, last_date, as_tokenized=False)
+
+    ### Add transformer embeddings used in pretrained model
+    last_note_tokenized = get_last_note(patient_sample_ids, notes_preprocessed, earliest_date, last_date, as_tokenized=True)
 
     # All features in feature_prepocessed form are features with columns ['SUBJECT_ID', 'FEATURE_NAME', 'DATE', 'VALUE], which can be later used for any of the aggregations we'd like.
     ### Feature construction
     # We are going to do a train test split based on patients to validate our model. We will only use those features that appear in the train set. Also, we will only use features that are shared between many patients (we will define "many" manually for each of the feature sets).  
     # This way we will lose some patients who don't have "popular" features, but that's fine since our goal is to compare similar patients, not to train the best model.
-    train_ids, test_ids = train_test_split(list(sample_ids), train_size=TRAIN_SIZE, random_state=RANDOM_SEED)
-    use_feature_sets = [diag_preprocessed, lab_preprocessed, meds_preprocessed]
-    earliest_date, last_date = define_train_period(deceased_to_date, *use_feature_sets)
+    train_ids, test_ids = train_test_split(list(patient_sample_ids), train_size=TRAIN_SIZE, random_state=RANDOM_SEED)
     diag, lab, med = clean_up_feature_sets(*use_feature_sets, earliest_date=earliest_date, last_date=last_date)
 
     #### Feat calculations
@@ -317,32 +355,40 @@ def main():
     meds_final = pivot_aggregation(meds_built, fill_value=0)
 
 
-    ### Train Baseline model
+    feats_to_train_on = [diag_final, meds_final, labs_final]
+
+    ### Train model with note TF-IDF: TODO do in scala
+    tf_idf_feats = get_tf_idf_feats(last_note)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    ### Train Baseline model  ################ ML stuff
 
     # We will use random forest to automatically incorporate feature interrelations into our model.
-    feats_to_train_on = [diag_final, meds_final, labs_final]
     df_final, target = get_training_and_target(deceased_to_date, *feats_to_train_on, is_baseline=True)
     train_cl_model(ModelType.Baseline, df_final, train_ids, target)
 
-    ### Add note TF-IDF
-    # Choose last note for each patient
 
-    last_note = get_last_note(notes_preprocessed, earliest_date, last_date, as_tokenized=False)
 
-    ### Train model with note TF-IDF
-    vectorizer = TfidfVectorizer(max_features=200)
-    tf_idf = vectorizer.fit_transform(last_note.CLEAN_TEXT)
-    select_cols = [f'TFIDF_{feat}' for feat in vectorizer.get_feature_names()]
-    tf_idf_feats = pd.DataFrame.sparse.from_spmatrix(tf_idf, columns=select_cols, index=last_note.SUBJECT_ID)
 
     # making sure no new rows are added # TODO?
     df_final, target = get_training_and_target(deceased_to_date, *feats_to_train_on, improved_df=tf_idf_feats)
     train_cl_model(ModelType.TF_IDF, df_final, train_ids, target)
 
-    # Better results, mostly from getting patient discharge information from notes.
 
-    ### Add transformer embeddings
-    last_note = get_last_note(notes_preprocessed, earliest_date, last_date, as_tokenized=True)
+    # Better results, mostly from getting patient discharge information from notes.
 
     config = AutoConfig.from_pretrained(PRETRAINED_MODEL_PATH, output_hidden_states=True, output_attentions=True)
     model = AutoModelForMaskedLM.from_pretrained(PRETRAINED_MODEL_PATH, config=config)
@@ -355,10 +401,11 @@ def main():
     model.eval()
 
     tokenizer = AutoTokenizer.from_pretrained(PRETRAINED_MODEL_PATH)
-    sentence = get_vector_for_text(last_note.TO_TOK.iloc[0], tokenizer, model)
+
+    sentence = get_vector_for_text(last_note_tokenized.TO_TOK.iloc[0], tokenizer, model)
 
     torch.save(sentence, SENTENCE_TENSOR_PATH)
-    save_embedding(last_note, tokenizer, model)
+    save_embedding(last_note_tokenized, tokenizer, model)
 
     # why? TODO
     subj_ids, embeds = get_saved_embeddings()
