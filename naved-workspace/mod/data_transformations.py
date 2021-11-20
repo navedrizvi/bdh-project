@@ -7,15 +7,11 @@ import os
 
 from tqdm.auto import tqdm
 import numpy as np
-from numpy.random.mtrand import sample
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 import ml
-
-#TODO cant import rn...
-# from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoConfig
 
 RAW_BASE_PATH = "../../data/raw/"
 ADMISSIONS_FNAME =  "ADMISSIONS.csv.gz"
@@ -28,7 +24,7 @@ PATIENTS_PATH = os.path.join(RAW_BASE_PATH, PATIENTS_FNAME)
 PATH_PROCESSED = "../../data/processed/"
 NOTES_PATH = os.path.join(PATH_PROCESSED, 'SAMPLE_NOTES.csv')
 
-SAMPLE_SIZE = 10000
+PATIENT_SAMPLE_SIZE = 10000
 TRAIN_SIZE = 0.8
 # We need to take into account only the events that happened during the observation window. The end of observation window is N days before death for deceased patients and date of last event for alive patients. We can have several sets of events (e.g. labs, diags, meds), so we need to choose the latest date out of those.
 OBSERVATION_WINDOW = 2000
@@ -37,12 +33,12 @@ PREDICTION_WINDOW = 50
 RANDOM_SEED = 1
 
 
+# TODO 1 use spark pandas and assert content correctness
 def get_patient_sample() -> Tuple[set, pd.Series, pd.Series]:
     patients = pd.read_csv(PATIENTS_PATH)
     #sampling random patients
-    patients_sample = patients.sample(n=1000, random_state=RANDOM_SEED)
-    sample_ids = set(patients_sample.SUBJECT_ID)
-    # TODO why read-write?
+    patients_sample = patients.sample(n=PATIENT_SAMPLE_SIZE, random_state=RANDOM_SEED)
+    sample_ids = set(patients_sample.SUBJECT_ID)  #py
     with open(os.path.join(PATH_PROCESSED, "SAMPLE_IDS.json"), 'w') as f:
         json.dump({'ids': list(sample_ids)}, f)
     with open(os.path.join(PATH_PROCESSED, "SAMPLE_IDS.json"), 'r') as f:
@@ -51,10 +47,11 @@ def get_patient_sample() -> Tuple[set, pd.Series, pd.Series]:
     # Moratality set
     deceased_to_date = patients_sample[patients_sample.EXPIRE_FLAG == 1] \
         .set_index('SUBJECT_ID').DOD.map(lambda x: pd.to_datetime(x).date()).to_dict()
-
     return sample_ids, patients_sample, deceased_to_date
 
 
+##########################
+# TODO 5 use spark pandas and assert content correctness
 def _get_data_for_sample(sample_ids: set,
                         file_name: str,
                         chunksize: int = 10_000) -> pd.DataFrame:
@@ -101,6 +98,8 @@ def preprocess(sample_ids: set) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFram
     lab_results['DATE'] = pd.to_datetime(lab_results['CHARTTIME']).dt.date
     lab_results['FEATURE_NAME'] = "LAB_" + lab_results['ITEMID'].astype(str)
     dropper = ['ROW_ID', 'HADM_ID', 'VALUE', 'VALUEUOM', 'FLAG', 'ITEMID', 'CHARTTIME']
+    renamer = {'VALUENUM': 'VALUE'}
+    lab_preprocessed = lab_results.drop(columns=dropper).rename(columns=renamer)
     lab_preprocessed = lab_results.drop(columns=dropper)
 
     #### Meds
@@ -111,19 +110,23 @@ def preprocess(sample_ids: set) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFram
     dropper = [col for col in meds.columns if col not in {'SUBJECT_ID', 'DATE', 'FEATURE_NAME', 'VALUE'}]
     meds_preprocessed = meds.drop(columns=dropper).rename(columns=renamer)
 
-    # Here we can preprocess notes. Later the same things can be done using Spark
+    # Here we can preprocess notes. Later the same things can be done using Spark # TODO 2
     #### Notes
     notes_preprocessed = pd.read_csv(NOTES_PATH)
     notes_preprocessed['DATE'] = pd.to_datetime(notes_preprocessed['CHARTDATE']).dt.date
     notes_preprocessed['CLEAN_TEXT'] = notes_preprocessed['TEXT'].map(_clean_text)
 
     return diag_preprocessed, lab_preprocessed, meds_preprocessed, notes_preprocessed
+##########################
 
+####### QA
+#ensuring every patient is unique
+# print(f"{patients.SUBJECT_ID.nunique()} unique patients in {len(patients)} rows")
 # TODO calculate summary stats for data to ensure quality (asserts, can be approx)
 # print(f"{patients.SUBJECT_ID.nunique()} unique patients in {len(patients)} rows")
+###########
 
-
-## TODO Feature engr. helpers
+## Feature engr. helpers
 def define_train_period(deceased_to_date: pd.Series, *feature_sets: List[pd.DataFrame], 
                         obs_w: int = OBSERVATION_WINDOW, 
                         pred_w: int = PREDICTION_WINDOW) -> Tuple[Dict, Dict]:
@@ -141,6 +144,8 @@ def define_train_period(deceased_to_date: pd.Series, *feature_sets: List[pd.Data
                      for subj_id, date in last_date.items()}
     return earliest_date, last_date
 
+
+# TODO 2 use spark pandas and assert content correctness
 def _clean_up_feature_sets(*feature_sets: List[pd.DataFrame], earliest_date: dict, last_date: dict) -> List[pd.DataFrame]:
     """Leave only features from inside the observation window."""
     results = []
@@ -150,6 +155,7 @@ def _clean_up_feature_sets(*feature_sets: List[pd.DataFrame], earliest_date: dic
     return results
 
 
+# TODO 2 use spark pandas and assert content correctness
 def _prepare_text_for_tokenizer(text: str) -> str:
     cleaned = ('. ').join(text.splitlines())
     removed_symbols = re.sub('[\[\]\*\_#:?!]+', ' ', cleaned)
@@ -159,7 +165,8 @@ def _prepare_text_for_tokenizer(text: str) -> str:
     return removed_duplicated_dots
 
 
-def get_last_note(sample_ids: set, notes_preprocessed: pd.DataFrame, earliest_date: Dict, last_date: Dict, as_tokenized=False):
+# TODO 2 use spark pandas and assert content correctness
+def get_last_note(sample_ids: set, notes_preprocessed: pd.DataFrame, earliest_date: Dict, last_date: Dict, as_tokenized=False) -> pd.Series:
     if as_tokenized:
         last_note = _clean_up_feature_sets(notes_preprocessed, earliest_date=earliest_date, last_date=last_date)[0]
         select_cols = ['SUBJECT_ID', 'DATE', 'TEXT']
@@ -172,9 +179,9 @@ def get_last_note(sample_ids: set, notes_preprocessed: pd.DataFrame, earliest_da
         select_cols = ['SUBJECT_ID', 'DATE', 'CLEAN_TEXT']
         last_note = last_note.sort_values(by=select_cols, ascending=False).drop_duplicates('SUBJECT_ID')[select_cols]
         last_note = last_note[last_note.SUBJECT_ID.isin(sample_ids)]
- 
     return last_note
 
+# TODO 3 use spark pandas and assert content correctness
 def build_feats(df: pd.DataFrame, agg: list, train_ids: list = None, low_thresh: int = None) -> pd.DataFrame:
     """Build feature aggregations for patient.
     
@@ -189,20 +196,21 @@ def build_feats(df: pd.DataFrame, agg: list, train_ids: list = None, low_thresh:
     print(f"Total feats: {df.FEATURE_NAME.nunique()}")
     if train_ids is not None:
         train_df = df[df.SUBJECT_ID.isin(train_ids)]
-        train_feats = set(train_df.FEATURE_NAME)
+        train_feats = set(train_df.FEATURE_NAME) #py
         df = df[df.FEATURE_NAME.isin(train_feats)]
-        print(f"Feats after leaving only train: {len(train_feats)}")
+        print(f"Feats after leaving only train: {len(train_feats)}") #py
         
     if low_thresh is not None:
         deduplicated = df.drop_duplicates(cols_to_use)
         count = Counter(deduplicated.FEATURE_NAME)
-        features_to_leave = set(feat for feat, cnt in count.items() if cnt > low_thresh)
+        features_to_leave = set(feat for feat, cnt in count.items() if cnt > low_thresh) #py
         df = df[df.FEATURE_NAME.isin(features_to_leave)]
-        print(f"Feats after removing rare: {len(features_to_leave)}")
+        print(f"Feats after removing rare: {len(features_to_leave)}") #py
     
     grouped = df.groupby(cols_to_use).agg(agg)
     return grouped
 
+# TODO 3 use spark pandas and assert content correctness
 def pivot_aggregation(df: pd.DataFrame, fill_value: int = None, use_sparse: bool = True) -> pd.DataFrame:
     """Make sparse pivoted table with SUBJECT_ID as index."""
     pivoted = df.unstack()
@@ -215,9 +223,9 @@ def pivot_aggregation(df: pd.DataFrame, fill_value: int = None, use_sparse: bool
     pivoted.columns = [f"{col[-1]}_{col[1]}" for col in pivoted.columns]
     return pivoted
 
+# TODO 4 cleanup for TF-IDF lemmatise, remove stopwords
 
-
-# TODO need to do in spark somehow
+# TODO 4 need to do in spark somehow
 def get_tf_idf_feats(last_note: pd.DataFrame) -> pd.DataFrame:
     vectorizer = TfidfVectorizer(max_features=200)
     tf_idf = vectorizer.fit_transform(last_note.CLEAN_TEXT)
@@ -262,9 +270,9 @@ def main():
     meds_final = pivot_aggregation(meds_built, fill_value=0)
 
     feats_to_train_on = [diag_final, meds_final, labs_final]
-    tf_idf_feats = get_tf_idf_feats(last_note)
+    tf_idf_notes_feats = get_tf_idf_feats(last_note)
 
-    ml.main(deceased_to_date, feats_to_train_on, train_ids, tf_idf_feats, last_note_tokenized)
+    ml.main(deceased_to_date, feats_to_train_on, train_ids, tf_idf_notes_feats, last_note_tokenized)
 
 
 
