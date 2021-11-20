@@ -27,6 +27,7 @@ class ModelType(enum.Enum):
     TF_IDF = 'TF_IDF'
     Embeddings = 'Embeddings'
 
+
 # common ML
 def get_training_and_target(deceased_to_date: pd.Series, *feats_to_train_on: List[pd.DataFrame], is_baseline = False, improved_df = None) -> Tuple[pd.DataFrame, pd.Series]:
     feats_to_train_on = [*feats_to_train_on]
@@ -58,8 +59,8 @@ def train_cl_model(model_type: ModelType, df: pd.DataFrame, train_ids: list, tar
     feature_importances = pd.Series(cl.feature_importances_, index=df.columns).sort_values(ascending=False).iloc[:10]
     print(f'Feature importances  {model_type.value}: {feature_importances}\n')
 
-# embedding ML
 
+# embedding ML
 # TODO refactor this to work on batches of notess
 def get_vector_for_text(text: str, tokenizer: AutoTokenizer, model: AutoModelForMaskedLM) -> torch.Tensor:
     """This is ugly and slow."""
@@ -81,6 +82,7 @@ def get_vector_for_text(text: str, tokenizer: AutoTokenizer, model: AutoModelFor
 
 
 def save_embedding(last_note: pd.DataFrame, tokenizer: AutoTokenizer, model: AutoModelForMaskedLM) -> None:
+    ''' Generate and save the embeddings to disk b/c they're expensive to compute '''
     for row_num, row in tqdm(last_note.iloc[0:].iterrows()):
         text = row['TO_TOK']
         subj_id = row['SUBJECT_ID']
@@ -113,26 +115,17 @@ def main(deceased_to_date: pd.Series, feats_to_train_on: List[pd.DataFrame], tra
     train_cl_model(ModelType.TF_IDF, df_final, train_ids, target)
     # Better results, mostly from getting patient discharge information from notes.
 
-    config = AutoConfig.from_pretrained(PRETRAINED_MODEL_NAME, output_hidden_states=True, output_attentions=True)
-    model = AutoModelForMaskedLM.from_pretrained(PRETRAINED_MODEL_NAME, config=config)
-
     ### Train model with transformer embeddings
     config = AutoConfig.from_pretrained(PRETRAINED_MODEL_NAME, output_hidden_states=True, output_attentions=True)
     model = AutoModelForMaskedLM.from_pretrained(PRETRAINED_MODEL_NAME, config=config)
-
     # why? TODO
     model.eval()
 
     tokenizer = AutoTokenizer.from_pretrained(PRETRAINED_MODEL_NAME)
-
     sentence = get_vector_for_text(last_note_tokenized.TO_TOK.iloc[0], tokenizer, model)
-
     torch.save(sentence, SENTENCE_TENSOR_PATH)
     save_embedding(last_note_tokenized, tokenizer, model)
-
-    # why? TODO
     subj_ids, embeds = get_saved_embeddings()
-
     embed_df = pd.DataFrame(embeds, index=subj_ids)
     embed_df.columns = [f"EMBED_{i}" for i in embed_df.columns]
 
