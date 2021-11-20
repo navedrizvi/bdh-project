@@ -1,0 +1,102 @@
+describe feature extraction/processing and modeling
+
+describe problem and tasks
+
+describe method/approach (models, data)
+
+results analysis
+
+==
+Sections
+- title and abstract
+- intro and background
+- problem formulation
+
+- approach and implementation
+- experimental results 
+- discussion
+- conclusion/optimization
+
+
+
+
+Approach:
+1. discuss etl
+2. discuss model (random classifier) 
+3. discuss TF-IDF
+4. discuss BERT/tranformer learning
+
+
+1. using transfoer better than tf-idf.
+2. cord transformt better than 1.
+3. improve results for respiratory patients vs other patients in mimic.
+    - find ICD for resp
+    - compare results
+
+
+
+- approach/metrics
+- literature survey
+- problem formulation
+- data discussion
+- approach
+- experimental evaluation
+- conclusion
+
+
+define cohort
+target and features
+scplit to train and truncatechars_htmlmodeling pipeline
+evaluate model candidates on performance approach/metricsinterpret results
+
+- show predictive features
+- compare to literature in terms of findings
+- present results as cool viz
+
+
+
+
+=======
+
+what do we need to work on? 
+
+how can we improve our results in?
+- preprocess/etl
+    - what patient sample size?
+- ml models?
+
+
+have notes processing
+
+
+
+
+
+
+
+====
+For all sections in proposal like Abstract, Introduction, Method, etc, rubrics are similar, you can check the proposal feedback and fulfill details or, if necessary, make modifications.
+
+For "Result" section, you need to include details about the data used with basic statistical analysis and visualization; show model performance with your selected metrics.  Provide supportive explanation and reasonable analysis.
+
+For "Conclusion" section, you should summarize the entire project draw conclusions based on current results. And provide the continued optimization plan you will try and explain why you think it’s useful to improve the model performance.
+
+
+
+
+
+
+
+
+
+
+
+"Team C5 Proposal:
+Motivation (0.2 pts): [0.2], Purpose of the project is well described. ;
+Literature Survey and Reference (0.8 pts): [0.6], The data science problem is not formulated clearly. Literature review is broad but does not cover methods and results with personal insights. ;
+Proposed Approach (0.8 pts): [0.8], The proposed approach is solid ;
+Metric (0.2 pts): [0], Metrics are not identified. ;
+Data Preparation (0.5 pts): [0.3], The dataset is not described. And lack of explnation about how the data will be used. ;
+Environment Setup (0.3 pts): [0.3], Spark will be used as a big-data tool. ;
+Timeline (0.2 pts): [0.2], Timeline of all phases is good. .
+(Grade by Xiaobo He)"

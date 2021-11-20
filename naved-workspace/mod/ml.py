@@ -16,7 +16,8 @@ from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoConfig
 EMBEDDINGS_BASE_PATH = '../data/embeddings/'
 SENTENCE_TENSOR_PATH = "../data/embeddings/99283.pt"
 EMBEDDING_TEMPLATE = "../data/embeddings/{subj_id}.pt"
-PRETRAINED_MODEL_PATH = 'deepset/covid_bert_base'
+
+PRETRAINED_MODEL_NAME = 'deepset/covid_bert_base'
 
 RANDOM_SEED = 1
 
@@ -99,7 +100,7 @@ def get_saved_embeddings() -> Tuple[List[int], List[np.array]]:
     return subj_ids, embeddings
 
 
-def main(deceased_to_date: pd.Series, feats_to_train_on: List[pd.DataFrame], train_ids: Set[int], tf_idf_feats: pd.DataFrame, last_note_tokenized: pd.Series):
+def main(deceased_to_date: pd.Series, feats_to_train_on: List[pd.DataFrame], train_ids: Set[int], tf_idf_notes_feats: pd.DataFrame, last_note_tokenized: pd.Series):
     ### Train Baseline model
 
     # We will use random forest to automatically incorporate feature interrelations into our model.
@@ -108,21 +109,21 @@ def main(deceased_to_date: pd.Series, feats_to_train_on: List[pd.DataFrame], tra
 
     ### Train model with note TF-IDF
     # making sure no new rows are added # TODO?
-    df_final, target = get_training_and_target(deceased_to_date, *feats_to_train_on, improved_df=tf_idf_feats)
+    df_final, target = get_training_and_target(deceased_to_date, *feats_to_train_on, improved_df=tf_idf_notes_feats)
     train_cl_model(ModelType.TF_IDF, df_final, train_ids, target)
     # Better results, mostly from getting patient discharge information from notes.
 
-    config = AutoConfig.from_pretrained(PRETRAINED_MODEL_PATH, output_hidden_states=True, output_attentions=True)
-    model = AutoModelForMaskedLM.from_pretrained(PRETRAINED_MODEL_PATH, config=config)
+    config = AutoConfig.from_pretrained(PRETRAINED_MODEL_NAME, output_hidden_states=True, output_attentions=True)
+    model = AutoModelForMaskedLM.from_pretrained(PRETRAINED_MODEL_NAME, config=config)
 
     ### Train model with transformer embeddings
-    config = AutoConfig.from_pretrained(PRETRAINED_MODEL_PATH, output_hidden_states=True, output_attentions=True)
-    model = AutoModelForMaskedLM.from_pretrained(PRETRAINED_MODEL_PATH, config=config)
+    config = AutoConfig.from_pretrained(PRETRAINED_MODEL_NAME, output_hidden_states=True, output_attentions=True)
+    model = AutoModelForMaskedLM.from_pretrained(PRETRAINED_MODEL_NAME, config=config)
 
     # why? TODO
     model.eval()
 
-    tokenizer = AutoTokenizer.from_pretrained(PRETRAINED_MODEL_PATH)
+    tokenizer = AutoTokenizer.from_pretrained(PRETRAINED_MODEL_NAME)
 
     sentence = get_vector_for_text(last_note_tokenized.TO_TOK.iloc[0], tokenizer, model)
 

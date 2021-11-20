@@ -2,3 +2,6 @@ conda env create -f environment.yml
 
 ~/miniconda3/envs/nlp/bin/python -m IPython -i ivan-fist-iter.py
 
+
+nbdiff notebook_1.ipynb notebook_2.ipynb
+jupytext --to py First_iteration.ipynb  

@@ -16,3 +16,5 @@ dependencies:
   - tqdm
   - ipython
   - huggingface-hub
+  - nbdime
+  - jupytext
