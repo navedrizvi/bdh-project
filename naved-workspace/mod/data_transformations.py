@@ -29,12 +29,12 @@ PATH_PROCESSED = "../../data/processed/"
 NOTES_PATH = os.path.join(PATH_PROCESSED, 'SAMPLE_NOTES.csv')
 
 SAMPLE_SIZE = 10000
-RANDOM_SEED = 1
 TRAIN_SIZE = 0.8
 # We need to take into account only the events that happened during the observation window. The end of observation window is N days before death for deceased patients and date of last event for alive patients. We can have several sets of events (e.g. labs, diags, meds), so we need to choose the latest date out of those.
 OBSERVATION_WINDOW = 2000
 PREDICTION_WINDOW = 50
 
+RANDOM_SEED = 1
 
 
 def get_patient_sample() -> Tuple[set, pd.Series, pd.Series]:
@@ -121,7 +121,6 @@ def preprocess(sample_ids: set) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFram
 
 # TODO calculate summary stats for data to ensure quality (asserts, can be approx)
 # print(f"{patients.SUBJECT_ID.nunique()} unique patients in {len(patients)} rows")
-
 
 
 ## TODO Feature engr. helpers
@@ -237,7 +236,6 @@ def main():
     diag_preprocessed, lab_preprocessed, meds_preprocessed, notes_preprocessed = preprocess(patient_sample_ids)
     use_feature_sets = [diag_preprocessed, lab_preprocessed, meds_preprocessed]
 
-
     earliest_date, last_date = define_train_period(deceased_to_date, *use_feature_sets)
     ### Add note TF-IDF
     # Choose last note for each patient
@@ -263,14 +261,10 @@ def main():
     labs_final = pivot_aggregation(labs_built, fill_value=0)
     meds_final = pivot_aggregation(meds_built, fill_value=0)
 
-
-
     feats_to_train_on = [diag_final, meds_final, labs_final]
     tf_idf_feats = get_tf_idf_feats(last_note)
 
-
-
-    ml.main(deceased_to_date, train_ids, feats_to_train_on, tf_idf_feats, last_note_tokenized)
+    ml.main(deceased_to_date, feats_to_train_on, train_ids, tf_idf_feats, last_note_tokenized)
 
 
 

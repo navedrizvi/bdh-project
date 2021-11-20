@@ -1,7 +1,7 @@
 import enum
 import os
 from glob import glob
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Set
 
 from tqdm.auto import tqdm
 import numpy as np
@@ -21,13 +21,11 @@ PRETRAINED_MODEL_PATH = 'deepset/covid_bert_base'
 RANDOM_SEED = 1
 
 
-
 class ModelType(enum.Enum):
     Baseline = 'Baseline'
     TF_IDF = 'TF_IDF'
     Embeddings = 'Embeddings'
 
-######################### ML STUFF
 # common ML
 def get_training_and_target(deceased_to_date: pd.Series, *feats_to_train_on: List[pd.DataFrame], is_baseline = False, improved_df = None) -> Tuple[pd.DataFrame, pd.Series]:
     feats_to_train_on = [*feats_to_train_on]
@@ -44,10 +42,12 @@ def get_training_and_target(deceased_to_date: pd.Series, *feats_to_train_on: Lis
     target = pd.Series(df_final.index.isin(deceased_to_date), index=df_final.index, name='target')
     return df_final, target
 
+
 def _train_and_predict(df: pd.DataFrame, target: pd.Series, train_loc: pd.Series, classifier) -> np.array:
     classifier.fit(df[train_loc], target[train_loc])
     pred = classifier.predict_proba(df[~train_loc])[:, 1]
     return pred
+
 
 def train_cl_model(model_type: ModelType, df: pd.DataFrame, train_ids: list, target: pd.Series) -> None:
     train_loc = df.index.isin(train_ids)
@@ -59,7 +59,7 @@ def train_cl_model(model_type: ModelType, df: pd.DataFrame, train_ids: list, tar
 
 # embedding ML
 
-# TODO TODO refactor this to work on batches of notess
+# TODO refactor this to work on batches of notess
 def get_vector_for_text(text: str, tokenizer: AutoTokenizer, model: AutoModelForMaskedLM) -> torch.Tensor:
     """This is ugly and slow."""
     encoding = tokenizer(text, 
@@ -78,12 +78,14 @@ def get_vector_for_text(text: str, tokenizer: AutoTokenizer, model: AutoModelFor
         text_embedding = torch.mean(token_vecs, dim=0)
         return text_embedding
 
+
 def save_embedding(last_note: pd.DataFrame, tokenizer: AutoTokenizer, model: AutoModelForMaskedLM) -> None:
     for row_num, row in tqdm(last_note.iloc[0:].iterrows()):
         text = row['TO_TOK']
         subj_id = row['SUBJECT_ID']
         embedding = get_vector_for_text(text, tokenizer, model)
         torch.save(embedding, EMBEDDING_TEMPLATE.format(subj_id=subj_id))
+
 
 def get_saved_embeddings() -> Tuple[List[int], List[np.array]]:
     subj_ids = []
@@ -97,20 +99,14 @@ def get_saved_embeddings() -> Tuple[List[int], List[np.array]]:
     return subj_ids, embeddings
 
 
-
-#################
-
-
-
-def main(deceased_to_date, train_ids, feats_to_train_on, tf_idf_feats, last_note_tokenized):
-
-    ### Train Baseline model  ################ ML stuff
+def main(deceased_to_date: pd.Series, feats_to_train_on: List[pd.DataFrame], train_ids: Set[int], tf_idf_feats: pd.DataFrame, last_note_tokenized: pd.Series):
+    ### Train Baseline model
 
     # We will use random forest to automatically incorporate feature interrelations into our model.
     df_final, target = get_training_and_target(deceased_to_date, *feats_to_train_on, is_baseline=True)
     train_cl_model(ModelType.Baseline, df_final, train_ids, target)
 
-    ### Train model with note TF-IDF: TODO do in scala
+    ### Train model with note TF-IDF
     # making sure no new rows are added # TODO?
     df_final, target = get_training_and_target(deceased_to_date, *feats_to_train_on, improved_df=tf_idf_feats)
     train_cl_model(ModelType.TF_IDF, df_final, train_ids, target)
