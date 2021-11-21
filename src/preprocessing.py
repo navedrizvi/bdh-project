@@ -1,8 +1,9 @@
+import os
 from typing import Dict, List, NamedTuple, Set, Tuple, Union
 import re
+import json
 import datetime as dt
 from collections import Counter
-import os
 
 from tqdm.auto import tqdm
 import numpy as np
@@ -18,17 +19,16 @@ LABEVENTS_FNAME = 'LABEVENTS.csv.gz'
 PRESCRIPTIONS_FNAME = 'PRESCRIPTIONS.csv.gz'
 PATIENTS_FNAME = 'PATIENTS.csv.gz'
 NOTES_FNAME = 'NOTEEVENTS.csv.gz'
+PATH_PROCESSED = '../data/processed/'
 
 DIAG_PATH = RAW_BASE_PATH.format(fname=DIAGNOSES_FNAME)
 PATIENTS_PATH = RAW_BASE_PATH.format(fname=PATIENTS_FNAME)
 
-PATH_PROCESSED = '../data/processed/'
-
-PATIENT_SAMPLE_SIZE = 10000
+PATIENT_SAMPLE_SIZE = 46520 # total is 46520
 TRAIN_SIZE = 0.8
 # We need to take into account only the events that happened during the observation window. The end of observation window is N days before death for deceased patients and date of last event for alive patients. We can have several sets of events (e.g. labs, diags, meds), so we need to choose the latest date out of those.
-OBSERVATION_WINDOW = 2000
-# OBSERVATION_WINDOW = 365*2
+# OBSERVATION_WINDOW = 2000
+OBSERVATION_WINDOW = 365*2
 PREDICTION_WINDOW = 50
 
 RANDOM_SEED = 1
@@ -59,34 +59,18 @@ relevant_diag_codes: List[int] = [*acute_diag_codes, *other_resp_tract_diag_code
 RELEVANT_DIAG_CODES = [str(e) for e in relevant_diag_codes]
 
 
-class RelevantPatientDetails(NamedTuple):
-    ''' Holds relevant patient data. Each patient here has a RELEVANT_DIAG_CODE '''
-    patient_ids: Set[int]
-    deceased_to_date: Set[int]
-    patients: pd.Series
-    diagnoses: pd.DataFrame
-
-
-def _get_patients_and_diags(all_patients: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    ''' Only read in patients with relevant diagnoses '''
-    # find out patients with RELEVANT_DIAG_CODES
-    all_diags = pd.read_csv(DIAG_PATH)
-    relevant_diags = all_diags.ICD9_CODE.isin(RELEVANT_DIAG_CODES)
-    diags = all_diags[relevant_diags]
-    diag_patient_ids = set(diags.SUBJECT_ID)
-    relevant_patients = all_patients.SUBJECT_ID.isin(diag_patient_ids)
-    patients = all_patients[relevant_patients]
-    return patients, diags
-
-
-def get_patients_details() -> RelevantPatientDetails:
+# TODO
+def get_patient_sample() -> Tuple[set, pd.Series, Dict[int, dt.date]]:
     patients = pd.read_csv(PATIENTS_PATH)
-    patients, diags = _get_patients_and_diags(patients)
+    #sampling random patients
+    patients_sample = patients.sample(n=PATIENT_SAMPLE_SIZE, random_state=RANDOM_SEED)
+    sample_ids = set(patients_sample.SUBJECT_ID)
+    patients_sample = patients[patients.SUBJECT_ID.isin(sample_ids)]
     # Moratality set
-    patient_ids = set(patients.SUBJECT_ID)  #py
-    deceased_to_date = patients[patients.EXPIRE_FLAG == 1] \
+    deceased_to_date: Dict[int, dt.date] = patients_sample[patients_sample.EXPIRE_FLAG == 1] \
         .set_index('SUBJECT_ID').DOD.map(lambda x: pd.to_datetime(x).date()).to_dict()
-    return RelevantPatientDetails(patient_ids, deceased_to_date, patients, diags)
+
+    return sample_ids, patients_sample, deceased_to_date
 
 
 def _get_data_for_sample(patient_ids: set,
@@ -117,15 +101,17 @@ def _clean_text(note: str) -> str:
     return lower
 
 
-def preprocess(patient_ids: Set[int], diagnoses: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def preprocess(patient_ids: Set[int]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     ''' Returns preprocessed dfs containg records for @patient_ids
     '''
     admissions = _get_data_for_sample(patient_ids, ADMISSIONS_FNAME)
     lab_results = _get_data_for_sample(patient_ids, LABEVENTS_FNAME, chunksize=100_000)
+    diagnoses = _get_data_for_sample(patient_ids, DIAGNOSES_FNAME)
     meds = _get_data_for_sample(patient_ids, PRESCRIPTIONS_FNAME)
     notes_preprocessed = _get_data_for_sample(patient_ids, NOTES_FNAME)
 
     admissions['ADMITTIME'] = pd.to_datetime(admissions.ADMITTIME).dt.date
+    print('done processing admissions')
     #### Diagnoses
 
     diagnoses['ICD9_CODE'] = 'ICD9_' + diagnoses['ICD9_CODE']
@@ -135,6 +121,7 @@ def preprocess(patient_ids: Set[int], diagnoses: pd.DataFrame) -> Tuple[pd.DataF
     renamer = {'ICD9_CODE': 'FEATURE_NAME', 'ADMITTIME': 'DATE'}
     diag_preprocessed = diagnoses.drop(columns=dropper).rename(columns=renamer)
     diag_preprocessed['VALUE'] = 1
+    print('done processing diags')
 
     #### Labs
     lab_results['DATE'] = pd.to_datetime(lab_results['CHARTTIME']).dt.date
@@ -142,7 +129,7 @@ def preprocess(patient_ids: Set[int], diagnoses: pd.DataFrame) -> Tuple[pd.DataF
     dropper = ['ROW_ID', 'HADM_ID', 'VALUE', 'VALUEUOM', 'FLAG', 'ITEMID', 'CHARTTIME']
     renamer = {'VALUENUM': 'VALUE'}
     lab_preprocessed = lab_results.drop(columns=dropper).rename(columns=renamer)
-    lab_preprocessed = lab_results.drop(columns=dropper)
+    print('done processing labs')
 
     #### Meds
     meds = meds[meds.ENDDATE.notna()]
@@ -151,11 +138,13 @@ def preprocess(patient_ids: Set[int], diagnoses: pd.DataFrame) -> Tuple[pd.DataF
     meds['FEATURE_NAME'] = 'MED_' + meds['GSN'].astype(str)
     dropper = [col for col in meds.columns if col not in {'SUBJECT_ID', 'DATE', 'FEATURE_NAME', 'VALUE'}]
     meds_preprocessed = meds.drop(columns=dropper).rename(columns=renamer)
+    print('done processing meds')
 
     # Here we can preprocess notes. Later the same things can be done using Spark # TODO 2
     #### Notes
     notes_preprocessed['DATE'] = pd.to_datetime(notes_preprocessed['CHARTDATE']).dt.date
     notes_preprocessed['CLEAN_TEXT'] = notes_preprocessed['TEXT'].map(_clean_text)
+    print('done processing notes')
 
     return diag_preprocessed, lab_preprocessed, meds_preprocessed, notes_preprocessed
 ##########################
@@ -277,28 +266,43 @@ def get_tf_idf_feats(last_note: pd.DataFrame) -> pd.DataFrame:
     tf_idf_feats = pd.DataFrame.sparse.from_spmatrix(tf_idf, columns=select_cols, index=last_note.SUBJECT_ID)
     return tf_idf_feats
 
+def write_to_disk(deceased_to_date: Dict[int, dt.date], train_ids: Set[int], test_ids: Set[int], feats_to_train_on: List[pd.DataFrame], tf_idf_notes_feats: pd.DataFrame, last_note_tokenized: pd.DataFrame):
+    deceased_to_date = {k: v.isoformat() for k, v in deceased_to_date.items()}
+    with open(os.path.join(PATH_PROCESSED, 'etl', "deceased_to_date.json"), 'w') as f:
+        json.dump(deceased_to_date, f)
+
+    with open(os.path.join(PATH_PROCESSED, 'etl', "train_ids.json"), 'w') as f:
+        json.dump({'train_ids': list(train_ids)}, f)
+
+    with open(os.path.join(PATH_PROCESSED, 'etl', "test_ids.json"), 'w') as f:
+        json.dump({'test_ids': list(test_ids)}, f)
+
+    for i, feat in enumerate(feats_to_train_on):
+        feat.to_csv(f'training_feat{i}.csv')
+    
+    tf_idf_notes_feats.to_csv(os.path.join(PATH_PROCESSED, 'tf_idf_notes_feats.csv'))
+    last_note_tokenized.to_csv(os.path.join(PATH_PROCESSED, 'last_note_tokenized.csv'))
 
 def main():
     # Get patient sample
-    patient_details = get_patients_details()
+    sample_ids, patients_sample, deceased_to_date = get_patient_sample()
     # get relevant MIMIC data for sample
-    diag_preprocessed, lab_preprocessed, meds_preprocessed, notes_preprocessed = preprocess(patient_details.patient_ids, patient_details.diagnoses)
+    diag_preprocessed, lab_preprocessed, meds_preprocessed, notes_preprocessed = preprocess(sample_ids)
     use_feature_sets = [diag_preprocessed, lab_preprocessed, meds_preprocessed]
 
-    earliest_date, last_date = define_train_period(patient_details.deceased_to_date, *use_feature_sets)
-    ### Add note TF-IDF
+    earliest_date, last_date = define_train_period(deceased_to_date, *use_feature_sets)
     # Choose last note for each patient
-    last_note = get_last_note(patient_details.patient_ids, notes_preprocessed, earliest_date, last_date, as_tokenized=False)
+    last_note = get_last_note(sample_ids, notes_preprocessed, earliest_date, last_date, as_tokenized=False)
 
     ### Add transformer embeddings used in pretrained model
-    last_note_tokenized = get_last_note(patient_details.patient_ids, notes_preprocessed, earliest_date, last_date, as_tokenized=True)
+    last_note_tokenized = get_last_note(sample_ids, notes_preprocessed, earliest_date, last_date, as_tokenized=True)
 
     # All features in feature_prepocessed form are features with columns ['SUBJECT_ID', 'FEATURE_NAME', 'DATE', 'VALUE], which can be later used for any of the aggregations we'd like.
 
     ### Feature construction
     # We are going to do a train test split based on patients to validate our model. We will only use those features that appear in the train set. Also, we will only use features that are shared between many patients (we will define 'many' manually for each of the feature sets).  
     # This way we will lose some patients who don't have 'popular' features, but that's fine since our goal is to compare similar patients, not to train the best model.
-    train_ids, test_ids = train_test_split(list(patient_details.patient_ids), train_size=TRAIN_SIZE, random_state=RANDOM_SEED)
+    train_ids, test_ids = train_test_split(list(sample_ids), train_size=TRAIN_SIZE, random_state=RANDOM_SEED)
     diag, lab, med = _clean_up_feature_sets(*use_feature_sets, earliest_date=earliest_date, last_date=last_date)
 
     #### Feat calculations
@@ -314,4 +318,5 @@ def main():
     feats_to_train_on = [diag_final, meds_final, labs_final]
     tf_idf_notes_feats = get_tf_idf_feats(last_note)
 
-    return patient_details.deceased_to_date, train_ids, feats_to_train_on, tf_idf_notes_feats, last_note_tokenized
+    write_to_disk(deceased_to_date, train_ids, test_ids, feats_to_train_on, tf_idf_notes_feats, last_note_tokenized)
+    return deceased_to_date, train_ids, feats_to_train_on, tf_idf_notes_feats, last_note_tokenized

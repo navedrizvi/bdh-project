@@ -9,11 +9,13 @@ import pandas as pd
 import torch
 from sklearn.metrics import roc_auc_score
 from sklearn.ensemble import RandomForestClassifier
+from joblib import dump
 
 from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoConfig
 
 
 EMBEDDINGS_BASE_PATH = '../data/embeddings/'
+MODELS_BASE_PATH = '../data/models/'
 EMBEDDING_TEMPLATE = '../data/embeddings/{subj_id}.pt'
 
 PRETRAINED_MODEL_NAME = 'deepset/covid_bert_base'
@@ -56,6 +58,7 @@ def train_cl_model(model_type: ModelType, df: pd.DataFrame, train_ids: Set[int],
     train_loc = df.index.isin(train_ids)
     cl = RandomForestClassifier(random_state=RANDOM_SEED)
     pred = _train_and_predict(df, target, train_loc, cl)
+    dump(cl, os.path.join(MODELS_BASE_PATH, f'{model_type.value}.joblib')) 
     print(f'Roc score RandomForestClassifier {model_type.value}: {roc_auc_score(target[~train_loc], pred)}')
     feature_importances = pd.Series(cl.feature_importances_, index=df.columns).sort_values(ascending=False).iloc[:10]
     print(f'Feature importances  {model_type.value}: {feature_importances}\n')
@@ -117,7 +120,7 @@ def generate_and_get_embeddings_df(last_note_tokenized: pd.Series) -> pd.DataFra
 
 def main(deceased_to_date: pd.Series, train_ids: Set[int], feats_to_train_on: List[pd.DataFrame], tf_idf_notes_feats: pd.DataFrame, last_note_tokenized: pd.Series):
     '''
-    params: deceased_to_date, train_ids, feats_to_train_on, tf_idf_notes_feats, last_note_tokenized
+    params: deceased_to_date, train_ids, feats_to_train_on, tf_idf_notes_feats, last_note_tokenized = preprocessing.main()
     '''
     ### Train Baseline model
     # We will use random forest to automatically incorporate feature interrelations into our model.
