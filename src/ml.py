@@ -10,12 +10,11 @@ import torch
 from sklearn.metrics import roc_auc_score
 from sklearn.ensemble import RandomForestClassifier
 
-#TODO cant import rn...
 from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoConfig
 
-EMBEDDINGS_BASE_PATH = '../data/embeddings/'
-SENTENCE_TENSOR_PATH = "../data/embeddings/99283.pt"
-EMBEDDING_TEMPLATE = "../data/embeddings/{subj_id}.pt"
+EMBEDDINGS_BASE_PATH = '../../data/embeddings/'
+SENTENCE_TENSOR_PATH = "../../data/embeddings/99283.pt"
+EMBEDDING_TEMPLATE = "../../data/embeddings/{subj_id}.pt"
 
 PRETRAINED_MODEL_NAME = 'deepset/covid_bert_base'
 
@@ -117,16 +116,11 @@ def get_embeddings_df(last_note_tokenized: pd.Series) -> pd.DataFrame:
     embed_df.columns = [f"EMBED_{i}" for i in embed_df.columns]
     return embed_df
 
+
 def main(deceased_to_date: pd.Series, train_ids: Set[int], feats_to_train_on: List[pd.DataFrame], tf_idf_notes_feats: pd.DataFrame, last_note_tokenized: pd.Series):
     ### Train Baseline model
     '''
     params: deceased_to_date, train_ids, feats_to_train_on, tf_idf_notes_feats, last_note_tokenized
-
-    len(deceased_to_date) = 4707
-    len(train_ids) = 6378
-    len(feats_to_train_on[0]) = len(diag_final) = 5719
-    len(feats_to_train_on[1]) = len(meds_final) = 5741
-    len(feats_to_train_on[2]) = len(labs_final) = 6208
     '''
 
     # We will use random forest to automatically incorporate feature interrelations into our model.
