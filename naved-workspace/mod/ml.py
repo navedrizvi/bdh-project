@@ -108,8 +108,6 @@ def _get_saved_embeddings() -> Tuple[List[int], List[np.array]]:
 def get_embeddings_df(last_note_tokenized: pd.Series) -> pd.DataFrame:
     config = AutoConfig.from_pretrained(PRETRAINED_MODEL_NAME, output_hidden_states=True, output_attentions=True)
     model = AutoModelForMaskedLM.from_pretrained(PRETRAINED_MODEL_NAME, config=config)
-    # why? TODO
-    # model.eval()
     tokenizer = AutoTokenizer.from_pretrained(PRETRAINED_MODEL_NAME)
     sentence = _get_vector_for_text(last_note_tokenized.TO_TOK.iloc[0], tokenizer, model)
     torch.save(sentence, SENTENCE_TENSOR_PATH)
@@ -118,6 +116,7 @@ def get_embeddings_df(last_note_tokenized: pd.Series) -> pd.DataFrame:
     embed_df = pd.DataFrame(embeds, index=subj_ids)
     embed_df.columns = [f"EMBED_{i}" for i in embed_df.columns]
     return embed_df
+
 
 def main(deceased_to_date: pd.Series, train_ids: Set[int], feats_to_train_on: List[pd.DataFrame], tf_idf_notes_feats: pd.DataFrame, last_note_tokenized: pd.Series):
     ### Train Baseline model
@@ -130,14 +129,11 @@ def main(deceased_to_date: pd.Series, train_ids: Set[int], feats_to_train_on: Li
     train_cl_model(ModelType.Baseline, df_final_baseline, train_ids, target_baseline)
 
     ### Train model with note TF-IDF
-    # making sure no new rows are added # TODO?
     df_final_tfidf, target_tfidf = get_training_and_target(ModelType.TF_IDF, deceased_to_date, *feats_to_train_on, improved_df=tf_idf_notes_feats)
     train_cl_model(ModelType.TF_IDF, df_final_tfidf, train_ids, target_tfidf)
     # Better results, mostly from getting patient discharge information from notes.
 
     ### Train model with transformer embeddings
-
-    # making sure no new rows are added
     embed_df = get_embeddings_df(last_note_tokenized)
     df_final_embeddings, target_embeddings = get_training_and_target(ModelType.Embeddings, deceased_to_date, *feats_to_train_on, improved_df=embed_df)
     train_cl_model(ModelType.Embeddings, df_final_embeddings, train_ids, target_embeddings)

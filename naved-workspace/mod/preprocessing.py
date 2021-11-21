@@ -1,4 +1,3 @@
-import json
 from typing import Dict, List, NamedTuple, Set, Tuple, Union
 import re
 import datetime as dt
@@ -88,7 +87,6 @@ def get_patients_details() -> PatientDetails:
     return PatientDetails(patient_ids, deceased_to_date, patients, diags)
 
 
-##########################
 def _get_data_for_sample(patient_ids: set,
                         file_name: str) -> pd.DataFrame:
     """Get the data only relevant for the sample."""
@@ -105,7 +103,7 @@ def _find_mean_dose(dose: str) -> Union[float, None]:
         parts = cleaned.split('-')
         return np.array(parts).astype(float).mean()
     except:
-        print(dose) # TODO fix to address the following conditions:
+        print(dose) # TODO fix to address the following conditions in src data:
         # ['50/500', '250/50', '500//50', '800/160', '-0.5-2', '0.3%', 'About-CM1000', 'one', '500/50', '12-', '-15-30', '1%', 'Hold Dose', '1.25/3', '1%', ': 5-10', '0.63/3', '0.63/3', '20-', '1.26mg/6', '1.26mg/6', '0.63 mg/3', '1.2/1']
         return None
         
@@ -316,7 +314,3 @@ def main():
     tf_idf_notes_feats = get_tf_idf_feats(last_note)
 
     return patient_details.deceased_to_date, train_ids, feats_to_train_on, tf_idf_notes_feats, last_note_tokenized
-
-
-
-
