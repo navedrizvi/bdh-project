@@ -90,10 +90,10 @@ def get_patients_details() -> RelevantPatientDetails:
 
 
 def _get_data_for_sample(patient_ids: set,
-                        file_name: str) -> pd.DataFrame:
+                        file_name: str, chunksize: int = 10_000) -> pd.DataFrame:
     '''Get the data only relevant for the sample.'''
     full_path = RAW_BASE_PATH.format(fname=file_name)
-    iterator = pd.read_csv(full_path, iterator=True)
+    iterator = pd.read_csv(full_path, iterator=True, chunksize=chunksize)
     return pd.concat([chunk[chunk.SUBJECT_ID.isin(patient_ids)] for chunk in tqdm(iterator)])
 
 
@@ -121,7 +121,7 @@ def preprocess(patient_ids: Set[int], diagnoses: pd.DataFrame) -> Tuple[pd.DataF
     ''' Returns preprocessed dfs containg records for @patient_ids
     '''
     admissions = _get_data_for_sample(patient_ids, ADMISSIONS_FNAME)
-    lab_results = _get_data_for_sample(patient_ids, LABEVENTS_FNAME)
+    lab_results = _get_data_for_sample(patient_ids, LABEVENTS_FNAME, chunksize=100_000)
     meds = _get_data_for_sample(patient_ids, PRESCRIPTIONS_FNAME)
     notes_preprocessed = _get_data_for_sample(patient_ids, NOTES_FNAME)
 
