@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List, Tuple
+from typing import Dict, List, NamedTuple, Set, Tuple, Union
 import re
 import datetime as dt
 from collections import Counter
@@ -11,7 +11,6 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-import ml
 
 RAW_BASE_PATH = "../../data/raw/"
 ADMISSIONS_FNAME =  "ADMISSIONS.csv.gz"
@@ -32,36 +31,73 @@ PREDICTION_WINDOW = 50
 
 RANDOM_SEED = 1
 
+# Respiratory illnesses ICD9 diag codes. Sources: 
+# https://en.wikipedia.org/wiki/List_of_ICD-9_codes_460–519:_diseases_of_the_respiratory_system
+# https://basicmedicalkey.com/diseases-of-the-respiratory-system-icd-9-cm-chapter-8-codes-460-519-and-icd-10-cm-chapter-10-codes-j00-j99/
+acute_diag_codes = [
+    460, 461, 462, 463, 464, 465, 466
+]
+other_resp_tract_diag_codes = [
+    470, 471, 472, 473, 474, 475, 476, 477, 478
+]
+pneumonia_and_influenza_diag_codes = [
+    480, 481, 482, 483, 484, 485, 486, 487, 488
+]
+grp4 = [
+    490, 491, 492, 493, 494, 495, 496
+]
+grp5 = [
+    500, 501, 502, 503, 504, 505, 506, 507, 508
+]
+grp6 = [
+    510, 511, 512, 513, 514, 515, 516, 517, 518, 519
+]
 
-# TODO 1 use spark pandas and assert content correctness
-def get_patient_sample() -> Tuple[set, pd.Series, pd.Series]:
+relevant_diag_codes: List[int] = [*acute_diag_codes, *other_resp_tract_diag_codes, *pneumonia_and_influenza_diag_codes, *grp4, *grp5, *grp6]
+RELEVANT_DIAG_CODES = [str(e) for e in relevant_diag_codes]
+
+
+class PatientDetails(NamedTuple):
+    patient_ids: Set[int]
+    deceased_to_date: Set[int]
+    patients: pd.Series
+    diagnoses: pd.DataFrame
+
+
+def _get_patients_and_diags(all_patients: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    ''' only read in patients with relevant diagnoses '''
+    # find out patients with RELEVANT_DIAG_CODES
+    diag_path = os.path.join(RAW_BASE_PATH, DIAGNOSES_FNAME)
+    # iterator = pd.read_csv(full_path, iterator=True)
+    all_diags = pd.read_csv(diag_path)
+    relevant_diags = all_diags.ICD9_CODE.isin(RELEVANT_DIAG_CODES)
+    diags = all_diags[relevant_diags]
+    diag_patient_ids = set(diags.SUBJECT_ID)
+    relevant_patients = all_patients.SUBJECT_ID.isin(diag_patient_ids)
+    patients = all_patients[relevant_patients]
+    return patients, diags
+
+
+def get_patients_details() -> PatientDetails:
     patients = pd.read_csv(PATIENTS_PATH)
-    #sampling random patients
-    patients_sample = patients.sample(n=PATIENT_SAMPLE_SIZE, random_state=RANDOM_SEED)
-    sample_ids = set(patients_sample.SUBJECT_ID)  #py
-    with open(os.path.join(PATH_PROCESSED, "SAMPLE_IDS.json"), 'w') as f:
-        json.dump({'ids': list(sample_ids)}, f)
-    with open(os.path.join(PATH_PROCESSED, "SAMPLE_IDS.json"), 'r') as f:
-        sample_ids = set(json.load(f)['ids'])
-    patients_sample = patients[patients.SUBJECT_ID.isin(sample_ids)]
+    patients, diags = _get_patients_and_diags(patients)
     # Moratality set
-    deceased_to_date = patients_sample[patients_sample.EXPIRE_FLAG == 1] \
+    patient_ids = set(patients.SUBJECT_ID)  #py
+    deceased_to_date = patients[patients.EXPIRE_FLAG == 1] \
         .set_index('SUBJECT_ID').DOD.map(lambda x: pd.to_datetime(x).date()).to_dict()
-    return sample_ids, patients_sample, deceased_to_date
+    return PatientDetails(patient_ids, deceased_to_date, patients, diags)
 
 
 ##########################
-# TODO 5 use spark pandas and assert content correctness
-def _get_data_for_sample(sample_ids: set,
-                        file_name: str,
-                        chunksize: int = 10_000) -> pd.DataFrame:
+def _get_data_for_sample(patient_ids: set,
+                        file_name: str) -> pd.DataFrame:
     """Get the data only relevant for the sample."""
     full_path = os.path.join(RAW_BASE_PATH, file_name)
-    iterator = pd.read_csv(full_path, iterator=True, chunksize=chunksize)
-    return pd.concat([chunk[chunk.SUBJECT_ID.isin(sample_ids)] for chunk in tqdm(iterator)])
+    iterator = pd.read_csv(full_path, iterator=True)
+    return pd.concat([chunk[chunk.SUBJECT_ID.isin(patient_ids)] for chunk in tqdm(iterator)])
 
 
-def _find_mean_dose(dose: str) -> float:
+def _find_mean_dose(dose: str) -> Union[float, None]:
     if pd.isnull(dose):
         return 0
     try:
@@ -69,8 +105,10 @@ def _find_mean_dose(dose: str) -> float:
         parts = cleaned.split('-')
         return np.array(parts).astype(float).mean()
     except:
-        print(dose)
-
+        print(dose) # TODO fix to address the following conditions:
+        # ['50/500', '250/50', '500//50', '800/160', '-0.5-2', '0.3%', 'About-CM1000', 'one', '500/50', '12-', '-15-30', '1%', 'Hold Dose', '1.25/3', '1%', ': 5-10', '0.63/3', '0.63/3', '20-', '1.26mg/6', '1.26mg/6', '0.63 mg/3', '1.2/1']
+        return None
+        
 
 def _clean_text(note: str) -> str:
     cleaned = re.sub(r'[^\w]', ' ', note).replace("_", " ")
@@ -79,16 +117,16 @@ def _clean_text(note: str) -> str:
     return lower
 
 
-def preprocess(sample_ids: set) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    ''' Returns preprocessed dfs containg records for @sample_ids '''
-    admissions = _get_data_for_sample(sample_ids, ADMISSIONS_FNAME)
-    diagnoses = _get_data_for_sample(sample_ids, DIAGNOSES_FNAME)
-    lab_results = _get_data_for_sample(sample_ids, LABEVENTS_FNAME, chunksize=100_000)
-    meds = _get_data_for_sample(sample_ids, PRESCRIPTIONS_FNAME)
+def preprocess(patient_ids: Set[int], diagnoses: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    ''' Returns preprocessed dfs containg records for @patient_ids
+    '''
+    admissions = _get_data_for_sample(patient_ids, ADMISSIONS_FNAME)
+    lab_results = _get_data_for_sample(patient_ids, LABEVENTS_FNAME)
+    meds = _get_data_for_sample(patient_ids, PRESCRIPTIONS_FNAME)
 
     admissions['ADMITTIME'] = pd.to_datetime(admissions.ADMITTIME).dt.date
-
     #### Diagnoses
+
     diagnoses['ICD9_CODE'] = "ICD9_" + diagnoses['ICD9_CODE']
     adm_cols = ['SUBJECT_ID', 'HADM_ID', 'ADMITTIME']
     diagnoses = diagnoses.merge(admissions[adm_cols], on=['SUBJECT_ID', 'HADM_ID'])
@@ -149,7 +187,6 @@ def define_train_period(deceased_to_date: pd.Series, *feature_sets: List[pd.Data
     return earliest_date, last_date
 
 
-# TODO 2 use spark pandas and assert content correctness
 def _clean_up_feature_sets(*feature_sets: List[pd.DataFrame], earliest_date: dict, last_date: dict) -> List[pd.DataFrame]:
     """Leave only features from inside the observation window."""
     results = []
@@ -169,21 +206,21 @@ def _prepare_text_for_tokenizer(text: str) -> str:
     return removed_duplicated_dots
 
 
-# TODO 2 use spark pandas and assert content correctness
-def get_last_note(sample_ids: set, notes_preprocessed: pd.DataFrame, earliest_date: Dict, last_date: Dict, as_tokenized=False) -> pd.Series:
+def get_last_note(patient_ids: set, notes_preprocessed: pd.DataFrame, earliest_date: Dict, last_date: Dict, as_tokenized=False) -> pd.Series:
     if as_tokenized:
         last_note = _clean_up_feature_sets(notes_preprocessed, earliest_date=earliest_date, last_date=last_date)[0]
         select_cols = ['SUBJECT_ID', 'DATE', 'TEXT']
         last_note = last_note.sort_values(by=select_cols, ascending=False).drop_duplicates('SUBJECT_ID')[select_cols]
-        last_note = last_note[last_note.SUBJECT_ID.isin(sample_ids)]
+        last_note = last_note[last_note.SUBJECT_ID.isin(patient_ids)]
         last_note['TO_TOK'] = last_note.TEXT.map(_prepare_text_for_tokenizer)
         last_note = last_note.reset_index(drop=True)
     else:
         last_note = _clean_up_feature_sets(notes_preprocessed, earliest_date=earliest_date, last_date=last_date)[0]
         select_cols = ['SUBJECT_ID', 'DATE', 'CLEAN_TEXT']
         last_note = last_note.sort_values(by=select_cols, ascending=False).drop_duplicates('SUBJECT_ID')[select_cols]
-        last_note = last_note[last_note.SUBJECT_ID.isin(sample_ids)]
+        last_note = last_note[last_note.SUBJECT_ID.isin(patient_ids)]
     return last_note
+
 
 # TODO 3 use spark pandas and assert content correctness
 def build_feats(df: pd.DataFrame, agg: list, train_ids: list = None, low_thresh: int = None) -> pd.DataFrame:
@@ -206,13 +243,14 @@ def build_feats(df: pd.DataFrame, agg: list, train_ids: list = None, low_thresh:
         
     if low_thresh is not None:
         deduplicated = df.drop_duplicates(cols_to_use)
-        count = Counter(deduplicated.FEATURE_NAME)
+        count: Dict[str, int] = Counter(deduplicated.FEATURE_NAME)
         features_to_leave = set(feat for feat, cnt in count.items() if cnt > low_thresh) #py
         df = df[df.FEATURE_NAME.isin(features_to_leave)]
         print(f"Feats after removing rare: {len(features_to_leave)}") #py
     
     grouped = df.groupby(cols_to_use).agg(agg)
     return grouped
+
 
 # TODO 3 use spark pandas and assert content correctness
 def pivot_aggregation(df: pd.DataFrame, fill_value: int = None, use_sparse: bool = True) -> pd.DataFrame:
@@ -230,6 +268,7 @@ def pivot_aggregation(df: pd.DataFrame, fill_value: int = None, use_sparse: bool
 
 # TODO 4 cleanup for TF-IDF lemmatise, remove stopwords
 
+
 # TODO 4 need to do in spark somehow
 def get_tf_idf_feats(last_note: pd.DataFrame) -> pd.DataFrame:
     vectorizer = TfidfVectorizer(max_features=200)
@@ -240,29 +279,27 @@ def get_tf_idf_feats(last_note: pd.DataFrame) -> pd.DataFrame:
     return tf_idf_feats
 
 
-
-
 def main():
     # Get patient sample
-    patient_sample_ids, patients_sample, deceased_to_date = get_patient_sample()
+    patient_details = get_patients_details()
     # get relevant MIMIC data for sample
-    diag_preprocessed, lab_preprocessed, meds_preprocessed, notes_preprocessed = preprocess(patient_sample_ids)
+    diag_preprocessed, lab_preprocessed, meds_preprocessed, notes_preprocessed = preprocess(patient_details.patient_ids, patient_details.diagnoses)
     use_feature_sets = [diag_preprocessed, lab_preprocessed, meds_preprocessed]
 
-    earliest_date, last_date = define_train_period(deceased_to_date, *use_feature_sets)
+    earliest_date, last_date = define_train_period(patient_details.deceased_to_date, *use_feature_sets)
     ### Add note TF-IDF
     # Choose last note for each patient
-    last_note = get_last_note(patient_sample_ids, notes_preprocessed, earliest_date, last_date, as_tokenized=False)
+    last_note = get_last_note(patient_details.patient_ids, notes_preprocessed, earliest_date, last_date, as_tokenized=False)
 
     ### Add transformer embeddings used in pretrained model
-    last_note_tokenized = get_last_note(patient_sample_ids, notes_preprocessed, earliest_date, last_date, as_tokenized=True)
+    last_note_tokenized = get_last_note(patient_details.patient_ids, notes_preprocessed, earliest_date, last_date, as_tokenized=True)
 
     # All features in feature_prepocessed form are features with columns ['SUBJECT_ID', 'FEATURE_NAME', 'DATE', 'VALUE], which can be later used for any of the aggregations we'd like.
 
     ### Feature construction
     # We are going to do a train test split based on patients to validate our model. We will only use those features that appear in the train set. Also, we will only use features that are shared between many patients (we will define "many" manually for each of the feature sets).  
     # This way we will lose some patients who don't have "popular" features, but that's fine since our goal is to compare similar patients, not to train the best model.
-    train_ids, test_ids = train_test_split(list(patient_sample_ids), train_size=TRAIN_SIZE, random_state=RANDOM_SEED)
+    train_ids, test_ids = train_test_split(list(patient_details.patient_ids), train_size=TRAIN_SIZE, random_state=RANDOM_SEED)
     diag, lab, med = _clean_up_feature_sets(*use_feature_sets, earliest_date=earliest_date, last_date=last_date)
 
     #### Feat calculations
@@ -278,7 +315,7 @@ def main():
     feats_to_train_on = [diag_final, meds_final, labs_final]
     tf_idf_notes_feats = get_tf_idf_feats(last_note)
 
-    ml.main(deceased_to_date, feats_to_train_on, train_ids, tf_idf_notes_feats, last_note_tokenized)
+    return patient_details.deceased_to_date, train_ids, feats_to_train_on, tf_idf_notes_feats, last_note_tokenized
 
 
 
