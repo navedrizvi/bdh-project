@@ -1,0 +1,8 @@
+conda env create -f environment.yml
+
+~/miniconda3/envs/hc_nlp_2/bin/python -m IPython -i ml.py
+
+jupytext --to py First_iteration.ipynb  
+
+nbdiff notebook_1.ipynb notebook_2.ipynb
+eg:  nbdiff-web First_iteration_v1.ipynb First_iteration_v2.ipynb 

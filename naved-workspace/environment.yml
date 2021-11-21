@@ -1,0 +1,21 @@
+name: hc_nlp_2
+channels:
+  - pytorch
+  - defaults
+dependencies:
+  - python=3.9
+  - pytorch
+  - torchvision
+  - scikit-learn
+  - numpy
+  - scipy
+  - pandas
+  - matplotlib
+  - pip
+  - transformers==4.12.5
+  - tqdm
+  - ipython
+  # - huggingface-hub
+  # - nbdime
+  # - jupytext
+  - mypy
