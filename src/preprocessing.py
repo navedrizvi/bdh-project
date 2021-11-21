@@ -11,21 +11,24 @@ from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 
-RAW_BASE_PATH = "../data/raw/"
-ADMISSIONS_FNAME =  "ADMISSIONS.csv.gz"
-DIAGNOSES_FNAME = "DIAGNOSES_ICD.csv.gz"
-LABEVENTS_FNAME = "LABEVENTS.csv.gz"
-PRESCRIPTIONS_FNAME = "PRESCRIPTIONS.csv.gz"
-PATIENTS_FNAME = "PATIENTS.csv.gz"
-PATIENTS_PATH = os.path.join(RAW_BASE_PATH, PATIENTS_FNAME)
+RAW_BASE_PATH = '../data/raw/{fname}'
+ADMISSIONS_FNAME =  'ADMISSIONS.csv.gz'
+DIAGNOSES_FNAME = 'DIAGNOSES_ICD.csv.gz'
+LABEVENTS_FNAME = 'LABEVENTS.csv.gz'
+PRESCRIPTIONS_FNAME = 'PRESCRIPTIONS.csv.gz'
+PATIENTS_FNAME = 'PATIENTS.csv.gz'
+NOTES_FNAME = 'NOTEEVENTS.csv.gz'
 
-PATH_PROCESSED = "../data/processed/"
-NOTES_PATH = os.path.join(PATH_PROCESSED, 'SAMPLE_NOTES.csv')
+DIAG_PATH = RAW_BASE_PATH.format(fname=DIAGNOSES_FNAME)
+PATIENTS_PATH = RAW_BASE_PATH.format(fname=PATIENTS_FNAME)
+
+PATH_PROCESSED = '../data/processed/'
 
 PATIENT_SAMPLE_SIZE = 10000
 TRAIN_SIZE = 0.8
 # We need to take into account only the events that happened during the observation window. The end of observation window is N days before death for deceased patients and date of last event for alive patients. We can have several sets of events (e.g. labs, diags, meds), so we need to choose the latest date out of those.
 OBSERVATION_WINDOW = 2000
+# OBSERVATION_WINDOW = 365*2
 PREDICTION_WINDOW = 50
 
 RANDOM_SEED = 1
@@ -56,7 +59,8 @@ relevant_diag_codes: List[int] = [*acute_diag_codes, *other_resp_tract_diag_code
 RELEVANT_DIAG_CODES = [str(e) for e in relevant_diag_codes]
 
 
-class PatientDetails(NamedTuple):
+class RelevantPatientDetails(NamedTuple):
+    ''' Holds relevant patient data. Each patient here has a RELEVANT_DIAG_CODE '''
     patient_ids: Set[int]
     deceased_to_date: Set[int]
     patients: pd.Series
@@ -64,10 +68,9 @@ class PatientDetails(NamedTuple):
 
 
 def _get_patients_and_diags(all_patients: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    ''' only read in patients with relevant diagnoses '''
+    ''' Only read in patients with relevant diagnoses '''
     # find out patients with RELEVANT_DIAG_CODES
-    diag_path = os.path.join(RAW_BASE_PATH, DIAGNOSES_FNAME)
-    all_diags = pd.read_csv(diag_path)
+    all_diags = pd.read_csv(DIAG_PATH)
     relevant_diags = all_diags.ICD9_CODE.isin(RELEVANT_DIAG_CODES)
     diags = all_diags[relevant_diags]
     diag_patient_ids = set(diags.SUBJECT_ID)
@@ -76,20 +79,20 @@ def _get_patients_and_diags(all_patients: pd.DataFrame) -> Tuple[pd.DataFrame, p
     return patients, diags
 
 
-def get_patients_details() -> PatientDetails:
+def get_patients_details() -> RelevantPatientDetails:
     patients = pd.read_csv(PATIENTS_PATH)
     patients, diags = _get_patients_and_diags(patients)
     # Moratality set
     patient_ids = set(patients.SUBJECT_ID)  #py
     deceased_to_date = patients[patients.EXPIRE_FLAG == 1] \
         .set_index('SUBJECT_ID').DOD.map(lambda x: pd.to_datetime(x).date()).to_dict()
-    return PatientDetails(patient_ids, deceased_to_date, patients, diags)
+    return RelevantPatientDetails(patient_ids, deceased_to_date, patients, diags)
 
 
 def _get_data_for_sample(patient_ids: set,
                         file_name: str) -> pd.DataFrame:
-    """Get the data only relevant for the sample."""
-    full_path = os.path.join(RAW_BASE_PATH, file_name)
+    '''Get the data only relevant for the sample.'''
+    full_path = RAW_BASE_PATH.format(fname=file_name)
     iterator = pd.read_csv(full_path, iterator=True)
     return pd.concat([chunk[chunk.SUBJECT_ID.isin(patient_ids)] for chunk in tqdm(iterator)])
 
@@ -102,13 +105,13 @@ def _find_mean_dose(dose: str) -> Union[float, None]:
         parts = cleaned.split('-')
         return np.array(parts).astype(float).mean()
     except:
-        print(dose) # TODO fix to address the following conditions in src data:
+        # print(dose) # TODO fix to address the following conditions in src data:
         # ['50/500', '250/50', '500//50', '800/160', '-0.5-2', '0.3%', 'About-CM1000', 'one', '500/50', '12-', '-15-30', '1%', 'Hold Dose', '1.25/3', '1%', ': 5-10', '0.63/3', '0.63/3', '20-', '1.26mg/6', '1.26mg/6', '0.63 mg/3', '1.2/1']
         return None
         
 
 def _clean_text(note: str) -> str:
-    cleaned = re.sub(r'[^\w]', ' ', note).replace("_", " ")
+    cleaned = re.sub(r'[^\w]', ' ', note).replace('_', ' ')
     removed_spaces = re.sub(' +', ' ', cleaned)
     lower = removed_spaces.lower()
     return lower
@@ -120,11 +123,12 @@ def preprocess(patient_ids: Set[int], diagnoses: pd.DataFrame) -> Tuple[pd.DataF
     admissions = _get_data_for_sample(patient_ids, ADMISSIONS_FNAME)
     lab_results = _get_data_for_sample(patient_ids, LABEVENTS_FNAME)
     meds = _get_data_for_sample(patient_ids, PRESCRIPTIONS_FNAME)
+    notes_preprocessed = _get_data_for_sample(patient_ids, NOTES_FNAME)
 
     admissions['ADMITTIME'] = pd.to_datetime(admissions.ADMITTIME).dt.date
     #### Diagnoses
 
-    diagnoses['ICD9_CODE'] = "ICD9_" + diagnoses['ICD9_CODE']
+    diagnoses['ICD9_CODE'] = 'ICD9_' + diagnoses['ICD9_CODE']
     adm_cols = ['SUBJECT_ID', 'HADM_ID', 'ADMITTIME']
     diagnoses = diagnoses.merge(admissions[adm_cols], on=['SUBJECT_ID', 'HADM_ID'])
     dropper = ['ROW_ID', 'SEQ_NUM', 'HADM_ID']
@@ -134,7 +138,7 @@ def preprocess(patient_ids: Set[int], diagnoses: pd.DataFrame) -> Tuple[pd.DataF
 
     #### Labs
     lab_results['DATE'] = pd.to_datetime(lab_results['CHARTTIME']).dt.date
-    lab_results['FEATURE_NAME'] = "LAB_" + lab_results['ITEMID'].astype(str)
+    lab_results['FEATURE_NAME'] = 'LAB_' + lab_results['ITEMID'].astype(str)
     dropper = ['ROW_ID', 'HADM_ID', 'VALUE', 'VALUEUOM', 'FLAG', 'ITEMID', 'CHARTTIME']
     renamer = {'VALUENUM': 'VALUE'}
     lab_preprocessed = lab_results.drop(columns=dropper).rename(columns=renamer)
@@ -144,13 +148,12 @@ def preprocess(patient_ids: Set[int], diagnoses: pd.DataFrame) -> Tuple[pd.DataF
     meds = meds[meds.ENDDATE.notna()]
     meds['DATE'] = pd.to_datetime(meds['ENDDATE']).dt.date
     meds['VALUE'] = meds['DOSE_VAL_RX'].map(_find_mean_dose)
-    meds['FEATURE_NAME'] = "MED_" + meds['GSN'].astype(str)
+    meds['FEATURE_NAME'] = 'MED_' + meds['GSN'].astype(str)
     dropper = [col for col in meds.columns if col not in {'SUBJECT_ID', 'DATE', 'FEATURE_NAME', 'VALUE'}]
     meds_preprocessed = meds.drop(columns=dropper).rename(columns=renamer)
 
     # Here we can preprocess notes. Later the same things can be done using Spark # TODO 2
     #### Notes
-    notes_preprocessed = pd.read_csv(NOTES_PATH)
     notes_preprocessed['DATE'] = pd.to_datetime(notes_preprocessed['CHARTDATE']).dt.date
     notes_preprocessed['CLEAN_TEXT'] = notes_preprocessed['TEXT'].map(_clean_text)
 
@@ -159,9 +162,9 @@ def preprocess(patient_ids: Set[int], diagnoses: pd.DataFrame) -> Tuple[pd.DataF
 
 ####### QA
 #ensuring every patient is unique
-# print(f"{patients.SUBJECT_ID.nunique()} unique patients in {len(patients)} rows")
+# print(f'{patients.SUBJECT_ID.nunique()} unique patients in {len(patients)} rows')
 # TODO (add more form nb) calculate summary stats for data to ensure quality (asserts, can be approx)
-# print(f"{patients.SUBJECT_ID.nunique()} unique patients in {len(patients)} rows")
+# print(f'{patients.SUBJECT_ID.nunique()} unique patients in {len(patients)} rows')
 ###########
 
 
@@ -169,7 +172,7 @@ def preprocess(patient_ids: Set[int], diagnoses: pd.DataFrame) -> Tuple[pd.DataF
 def define_train_period(deceased_to_date: pd.Series, *feature_sets: List[pd.DataFrame], 
                         obs_w: int = OBSERVATION_WINDOW, 
                         pred_w: int = PREDICTION_WINDOW) -> Tuple[Dict, Dict]:
-    """Create SUBJECT_ID -> earliest_date and SUBJECT_ID -> last date dicts."""
+    '''Create SUBJECT_ID -> earliest_date and SUBJECT_ID -> last date dicts.'''
     cols = ['SUBJECT_ID', 'DATE']
     all_feats = pd.concat([feats[cols] for feats in feature_sets])
     last_date_base = all_feats.groupby('SUBJECT_ID').DATE.max().to_dict()
@@ -185,7 +188,7 @@ def define_train_period(deceased_to_date: pd.Series, *feature_sets: List[pd.Data
 
 
 def _clean_up_feature_sets(*feature_sets: List[pd.DataFrame], earliest_date: dict, last_date: dict) -> List[pd.DataFrame]:
-    """Leave only features from inside the observation window."""
+    '''Leave only features from inside the observation window.'''
     results = []
     for feats in feature_sets:
         results.append(feats[(feats.DATE < feats.SUBJECT_ID.map(last_date))
@@ -219,9 +222,8 @@ def get_last_note(patient_ids: set, notes_preprocessed: pd.DataFrame, earliest_d
     return last_note
 
 
-# TODO 3 use spark pandas and assert content correctness
 def build_feats(df: pd.DataFrame, agg: list, train_ids: list = None, low_thresh: int = None) -> pd.DataFrame:
-    """Build feature aggregations for patient.
+    '''Build feature aggregations for patient.
     
     Args:
         agg: list of aggregations to use
@@ -229,21 +231,21 @@ def build_feats(df: pd.DataFrame, agg: list, train_ids: list = None, low_thresh:
             will be used
         low_thresh: if not empty, only features that more than low_thresh
             patients have will be used
-    """
+    '''
     cols_to_use = ['SUBJECT_ID', 'FEATURE_NAME']
-    print(f"Total feats: {df.FEATURE_NAME.nunique()}")
+    print(f'Total feats: {df.FEATURE_NAME.nunique()}')
     if train_ids is not None:
         train_df = df[df.SUBJECT_ID.isin(train_ids)]
         train_feats = set(train_df.FEATURE_NAME) #py
         df = df[df.FEATURE_NAME.isin(train_feats)]
-        print(f"Feats after leaving only train: {len(train_feats)}") #py
+        print(f'Feats after leaving only train: {len(train_feats)}') #py
         
     if low_thresh is not None:
         deduplicated = df.drop_duplicates(cols_to_use)
-        count: Dict[str, int] = Counter(deduplicated.FEATURE_NAME)
+        count: Dict[str, int] = Counter(deduplicated.FEATURE_NAME) #py
         features_to_leave = set(feat for feat, cnt in count.items() if cnt > low_thresh) #py
         df = df[df.FEATURE_NAME.isin(features_to_leave)]
-        print(f"Feats after removing rare: {len(features_to_leave)}") #py
+        print(f'Feats after removing rare: {len(features_to_leave)}') #py
     
     grouped = df.groupby(cols_to_use).agg(agg)
     return grouped
@@ -251,15 +253,15 @@ def build_feats(df: pd.DataFrame, agg: list, train_ids: list = None, low_thresh:
 
 # TODO 3 use spark pandas and assert content correctness
 def pivot_aggregation(df: pd.DataFrame, fill_value: int = None, use_sparse: bool = True) -> pd.DataFrame:
-    """Make sparse pivoted table with SUBJECT_ID as index."""
+    '''Make sparse pivoted table with SUBJECT_ID as index.'''
     pivoted = df.unstack()
     if fill_value is not None:
         pivoted = pivoted.fillna(fill_value)
     
     if use_sparse:
-        pivoted = pivoted.astype(pd.SparseDtype("float", fill_value))
+        pivoted = pivoted.astype(pd.SparseDtype('float', fill_value))
     
-    pivoted.columns = [f"{col[-1]}_{col[1]}" for col in pivoted.columns]
+    pivoted.columns = [f'{col[-1]}_{col[1]}' for col in pivoted.columns]
     return pivoted
 
 
@@ -294,8 +296,8 @@ def main():
     # All features in feature_prepocessed form are features with columns ['SUBJECT_ID', 'FEATURE_NAME', 'DATE', 'VALUE], which can be later used for any of the aggregations we'd like.
 
     ### Feature construction
-    # We are going to do a train test split based on patients to validate our model. We will only use those features that appear in the train set. Also, we will only use features that are shared between many patients (we will define "many" manually for each of the feature sets).  
-    # This way we will lose some patients who don't have "popular" features, but that's fine since our goal is to compare similar patients, not to train the best model.
+    # We are going to do a train test split based on patients to validate our model. We will only use those features that appear in the train set. Also, we will only use features that are shared between many patients (we will define 'many' manually for each of the feature sets).  
+    # This way we will lose some patients who don't have 'popular' features, but that's fine since our goal is to compare similar patients, not to train the best model.
     train_ids, test_ids = train_test_split(list(patient_details.patient_ids), train_size=TRAIN_SIZE, random_state=RANDOM_SEED)
     diag, lab, med = _clean_up_feature_sets(*use_feature_sets, earliest_date=earliest_date, last_date=last_date)
 
