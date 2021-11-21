@@ -117,7 +117,6 @@ def get_embeddings_df(last_note_tokenized: pd.Series) -> pd.DataFrame:
     embed_df.columns = [f"EMBED_{i}" for i in embed_df.columns]
     return embed_df
 
-
 def main(deceased_to_date: pd.Series, train_ids: Set[int], feats_to_train_on: List[pd.DataFrame], tf_idf_notes_feats: pd.DataFrame, last_note_tokenized: pd.Series):
     ### Train Baseline model
     '''
