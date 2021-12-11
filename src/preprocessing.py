@@ -62,7 +62,7 @@ RELEVANT_DIAG_CODES = [str(e) for e in relevant_diag_codes]
 from pyspark.sql.functions import to_timestamp, to_date, substring
 
 
-def get_patient_sample() -> Tuple[pyspark.pandas.series.Series, pyspark.pandas.frame.DataFrame, pyspark.pandas.frame.DataFrame]:
+def get_patient_sample() -> Tuple[pyspark.pandas.series.Series[int], pyspark.pandas.frame.DataFrame, pyspark.pandas.frame.DataFrame]:
     patients = read_csv(PATIENTS_PATH)
     sample_ids = patients.SUBJECT_ID
     # Moratality set
@@ -76,12 +76,11 @@ def get_patient_sample() -> Tuple[pyspark.pandas.series.Series, pyspark.pandas.f
     return sample_ids, patients, deceased_patients
 
 
-def _get_data_for_sample(patient_ids: set,
-                        file_name: str, chunksize: int = 10_000) -> pd.DataFrame:
+def _get_data_for_sample(patient_ids: pyspark.pandas.series.Series[int]) -> pyspark.pandas.frame.DataFrame:
     '''Get the data only relevant for the sample.'''
     full_path = RAW_BASE_PATH.format(fname=file_name)
-    iterator = pd.read_csv(full_path, iterator=True, chunksize=chunksize)
-    return pd.concat([chunk[chunk.SUBJECT_ID.isin(patient_ids)] for chunk in tqdm(iterator)])
+    iterator = read_csv(path=full_path)
+    return pd.concat([chunk[chunk.SUBJECT_ID.isin(patient_ids)]])
 
 
 def _find_mean_dose(dose: str) -> Union[float, None]:
@@ -104,11 +103,11 @@ def _clean_text(note: str) -> str:
     return lower
 
 
-def preprocess(patient_ids: Set[int]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def preprocess(patient_ids: pyspark.pandas.series.Series[int]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     ''' Returns preprocessed dfs containg records for @patient_ids
     '''
     admissions = _get_data_for_sample(patient_ids, ADMISSIONS_FNAME)
-    lab_results = _get_data_for_sample(patient_ids, LABEVENTS_FNAME, chunksize=100_000)
+    lab_results = _get_data_for_sample(patient_ids, LABEVENTS_FNAME)
     diagnoses = _get_data_for_sample(patient_ids, DIAGNOSES_FNAME)
     meds = _get_data_for_sample(patient_ids, PRESCRIPTIONS_FNAME)
     notes_preprocessed = _get_data_for_sample(patient_ids, NOTES_FNAME)
