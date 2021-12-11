@@ -5,11 +5,12 @@ import json
 import datetime as dt
 from collections import Counter
 
-from tqdm.auto import tqdm
-import numpy as np
-import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.feature_extraction.text import TfidfVectorizer
+# from tqdm.auto import tqdm
+# import numpy as np
+# import pandas as pd
+# from sklearn.model_selection import train_test_split
+# from sklearn.feature_extraction.text import TfidfVectorizer
+from pyspark.pandas import read_csv
 
 
 RAW_BASE_PATH = '../data/raw/{fname}'
@@ -58,27 +59,28 @@ grp6 = [
 relevant_diag_codes: List[int] = [*acute_diag_codes, *other_resp_tract_diag_codes, *pneumonia_and_influenza_diag_codes, *grp4, *grp5, *grp6]
 RELEVANT_DIAG_CODES = [str(e) for e in relevant_diag_codes]
 
+from pyspark.sql.functions import to_timestamp, to_date, substring
 
-# TODO
-def get_patient_sample() -> Tuple[set, pd.Series, Dict[int, dt.date]]:
-    patients = pd.read_csv(PATIENTS_PATH)
-    #sampling random patients
-    patients_sample = patients.sample(n=PATIENT_SAMPLE_SIZE, random_state=RANDOM_SEED)
-    sample_ids = set(patients_sample.SUBJECT_ID)
-    patients_sample = patients[patients.SUBJECT_ID.isin(sample_ids)]
+
+def get_patient_sample() -> Tuple[pyspark.pandas.series.Series[int], pyspark.pandas.frame.DataFrame, pyspark.pandas.frame.DataFrame]:
+    patients = read_csv(PATIENTS_PATH)
+    sample_ids = patients.SUBJECT_ID
     # Moratality set
-    deceased_to_date: Dict[int, dt.date] = patients_sample[patients_sample.EXPIRE_FLAG == 1] \
-        .set_index('SUBJECT_ID').DOD.map(lambda x: pd.to_datetime(x).date()).to_dict()
+    deceased_patients = patients[patients.EXPIRE_FLAG == 1] 
+    deceased_patients = deceased_patients[['SUBJECT_ID', 'DOD']]
+    # first 10 characters of DOD column is date (we're ignoring time)
+    deceased_patients = deceased_patients.to_spark()
+    deceased_patients = deceased_patients.select('SUBJECT_ID', substring('DOD', 0, 10).alias('DOD'))
+    deceased_patients = deceased_patients.to_pandas_on_spark()
 
-    return sample_ids, patients_sample, deceased_to_date
+    return sample_ids, patients, deceased_patients
 
 
-def _get_data_for_sample(patient_ids: set,
-                        file_name: str, chunksize: int = 10_000) -> pd.DataFrame:
+def _get_data_for_sample(patient_ids: pyspark.pandas.series.Series[int]) -> pyspark.pandas.frame.DataFrame:
     '''Get the data only relevant for the sample.'''
     full_path = RAW_BASE_PATH.format(fname=file_name)
-    iterator = pd.read_csv(full_path, iterator=True, chunksize=chunksize)
-    return pd.concat([chunk[chunk.SUBJECT_ID.isin(patient_ids)] for chunk in tqdm(iterator)])
+    iterator = read_csv(path=full_path)
+    return pd.concat([chunk[chunk.SUBJECT_ID.isin(patient_ids)]])
 
 
 def _find_mean_dose(dose: str) -> Union[float, None]:
@@ -101,11 +103,11 @@ def _clean_text(note: str) -> str:
     return lower
 
 
-def preprocess(patient_ids: Set[int]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def preprocess(patient_ids: pyspark.pandas.series.Series[int]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     ''' Returns preprocessed dfs containg records for @patient_ids
     '''
     admissions = _get_data_for_sample(patient_ids, ADMISSIONS_FNAME)
-    lab_results = _get_data_for_sample(patient_ids, LABEVENTS_FNAME, chunksize=100_000)
+    lab_results = _get_data_for_sample(patient_ids, LABEVENTS_FNAME)
     diagnoses = _get_data_for_sample(patient_ids, DIAGNOSES_FNAME)
     meds = _get_data_for_sample(patient_ids, PRESCRIPTIONS_FNAME)
     notes_preprocessed = _get_data_for_sample(patient_ids, NOTES_FNAME)
@@ -278,7 +280,7 @@ def write_to_disk(deceased_to_date: Dict[int, dt.date], train_ids: Set[int], tes
         json.dump({'test_ids': list(test_ids)}, f)
 
     for i, feat in enumerate(feats_to_train_on):
-        feat.to_csv(f'training_feat{i}.csv')
+        feat.to_csv(os.path.join(PATH_PROCESSED, f'training_feat{i}.csv'))
     
     tf_idf_notes_feats.to_csv(os.path.join(PATH_PROCESSED, 'tf_idf_notes_feats.csv'))
     last_note_tokenized.to_csv(os.path.join(PATH_PROCESSED, 'last_note_tokenized.csv'))
