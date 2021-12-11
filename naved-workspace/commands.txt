@@ -1,6 +1,7 @@
 conda env create -f environment.yml
 
 ~/miniconda3/envs/hc_nlp_2/bin/python -m IPython -i ml.py
+/Users/naved/opt/miniconda3/envs/nlp/bin/ipython
 
 jupytext --to py First_iteration.ipynb  
 
