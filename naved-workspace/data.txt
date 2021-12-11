@@ -1,0 +1,61 @@
+ADMISSIONS_FNAME =  'ADMISSIONS.csv.gz'
+DIAGNOSES_FNAME = 'DIAGNOSES_ICD.csv.gz'
+LABEVENTS_FNAME = 'LABEVENTS.csv.gz'
+PRESCRIPTIONS_FNAME = 'PRESCRIPTIONS.csv.gz'
+PATIENTS_FNAME = 'PATIENTS.csv.gz'
+NOTES_FNAME = 'NOTEEVENTS.csv.gz'
+
+
+#### Diagnoses
+adm_cols = ['SUBJECT_ID', 'HADM_ID', 'ADMITTIME']
+diagnoses = diagnoses.merge(admissions[adm_cols], on=['SUBJECT_ID', 'HADM_ID'])
+dropper = ['ROW_ID', 'SEQ_NUM', 'HADM_ID']
+renamer = {'ICD9_CODE': 'FEATURE_NAME', 'ADMITTIME': 'DATE'}
+diag_preprocessed = diagnoses.drop(columns=dropper).rename(columns=renamer)
+diag_preprocessed['VALUE'] = 1
+
+#### Labs
+lab_results['FEATURE_NAME'] = 'LAB_' + lab_results['ITEMID'].astype(str)
+dropper = ['ROW_ID', 'HADM_ID', 'VALUE', 'VALUEUOM', 'FLAG', 'ITEMID', 'CHARTTIME']
+renamer = {'VALUENUM': 'VALUE'}
+lab_preprocessed = lab_results.drop(columns=dropper).rename(columns=renamer)
+
+#### Meds
+meds = meds[meds.ENDDATE.notna()]
+meds['DATE'] = pd.to_datetime(meds['ENDDATE']).dt.date
+meds['VALUE'] = meds['DOSE_VAL_RX'].map(_find_mean_dose)
+meds['FEATURE_NAME'] = 'MED_' + meds['GSN'].astype(str)
+dropper = [col for col in meds.columns if col not in {'SUBJECT_ID', 'DATE', 'FEATURE_NAME', 'VALUE'}]
+meds_preprocessed = meds.drop(columns=dropper).rename(columns=renamer)
+
+# Here we can preprocess notes. Later the same things can be done using Spark # TODO 2
+#### Notes
+notes_preprocessed['DATE'] = pd.to_datetime(notes_preprocessed['CHARTDATE']).dt.date
+
+
+
+
+
+##################################
+we use local spark for pre-processing
+high-level:
+- 
+- 
+involves:
+1. cleaning
+2. defining train period
+3. cleaning featuresets
+4. preparing text for tokenizer
+5. getting last notes
+6. building features
+7. pivot aggr
+8. tf idf feats
+
+Splits
+Hypothesis-driven splits
+
+
+
+1. predict with CORD features; then predict with MIMIC-III PubMed features
+2. compare ROC AUC scores for the set of patients with respiratory diesases to ROC score of not (patients with respiratory diesases)
+3. our hypothesis is that the CORD-19 trained model would get better ROC AUC for repiratory but worse for others. This shows knowledge tranfer has happened
