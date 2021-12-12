@@ -27,7 +27,7 @@ PATH_PROCESSED = '../data/processed/'
 DIAG_PATH = RAW_BASE_PATH.format(fname=DIAGNOSES_FNAME)
 PATIENTS_PATH = RAW_BASE_PATH.format(fname=PATIENTS_FNAME)
 
-PATIENT_SAMPLE_SIZE = 46520 # total is 46520
+PATIENT_SAMPLE_SIZE = 1000 # total is 46520
 TRAIN_SIZE = 0.8
 # We need to take into account only the events that happened during the observation window. The end of observation window is N days before death for deceased patients and date of last event for alive patients. We can have several sets of events (e.g. labs, diags, meds), so we need to choose the latest date out of those.
 # OBSERVATION_WINDOW = 2000
@@ -168,7 +168,7 @@ def preprocess(patient_ids: Set[int]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Da
 
 
 ## Feature engr. helpers
-def define_train_period(deceased_to_date: pd.Series, *feature_sets: List[pd.DataFrame], 
+def define_train_period(deceased_to_date: pd.Series, *feature_sets: List['pyspark.pandas.frame.DataFrame'], 
                         obs_w: int = OBSERVATION_WINDOW, 
                         pred_w: int = PREDICTION_WINDOW) -> Tuple[Dict, Dict]:
     '''Create SUBJECT_ID -> earliest_date and SUBJECT_ID -> last date dicts.'''

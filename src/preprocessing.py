@@ -280,16 +280,27 @@ def preprocess(patient_ids: 'pyspark.pandas.series.Series[int]') -> Tuple['pyspa
 
 
 ## Feature engr. helpers
-def define_train_period(deceased_to_date: pd.Series, *feature_sets: List[pd.DataFrame], 
+def define_train_period(deceased_to_date: 'pyspark.pandas.frame.DataFrame', *feature_sets: List['pyspark.pandas.frame.DataFrame'],
                         obs_w: int = OBSERVATION_WINDOW, 
                         pred_w: int = PREDICTION_WINDOW) -> Tuple[Dict, Dict]:
     '''Create SUBJECT_ID -> earliest_date and SUBJECT_ID -> last date dicts.'''
     cols = ['SUBJECT_ID', 'DATE']
+
+	
     all_feats = pd.concat([feats[cols] for feats in feature_sets])
-    last_date_base = all_feats.groupby('SUBJECT_ID').DATE.max().to_dict()
+    last_date_base = all_feats.groupby('SUBJECT_ID').DATE.max()
     last_date = {subj_id: date
                  for subj_id, date in last_date_base.items()
                  if subj_id not in deceased_to_date}
+
+
+
+
+
+
+
+	
+
     subtracted_pred_w = {subj_id: date - dt.timedelta(days=pred_w)
                          for subj_id, date in deceased_to_date.items()}
     last_date.update(subtracted_pred_w)
@@ -410,9 +421,9 @@ def main():
     patient_ids, patients_sample, deceased_to_date = get_patient_sample()
     # get relevant MIMIC data for sample
     diag_preprocessed, lab_preprocessed, meds_preprocessed, notes_preprocessed = preprocess(patient_ids)
-    use_feature_sets = [diag_preprocessed, lab_preprocessed, meds_preprocessed]
+    feature_sets = [diag_preprocessed, lab_preprocessed, meds_preprocessed]
 
-    earliest_date, last_date = define_train_period(deceased_to_date, *use_feature_sets)
+    earliest_date, last_date = define_train_period(deceased_to_date, *feature_sets)
     # Choose last note for each patient
     last_note = get_last_note(patient_ids, notes_preprocessed, earliest_date, last_date, as_tokenized=False)
 
@@ -425,7 +436,7 @@ def main():
     # We are going to do a train test split based on patients to validate our model. We will only use those features that appear in the train set. Also, we will only use features that are shared between many patients (we will define 'many' manually for each of the feature sets).  
     # This way we will lose some patients who don't have 'popular' features, but that's fine since our goal is to compare similar patients, not to train the best model.
     train_ids, test_ids = train_test_split(list(patient_ids), train_size=TRAIN_SIZE, random_state=RANDOM_SEED)
-    diag, lab, med = _clean_up_feature_sets(*use_feature_sets, earliest_date=earliest_date, last_date=last_date)
+    diag, lab, med = _clean_up_feature_sets(*feature_sets, earliest_date=earliest_date, last_date=last_date)
 
     #### Feat calculations
     diag_built = build_feats(diag, agg=[lambda x: x.sum() > 0], train_ids=train_ids, low_thresh=30)
