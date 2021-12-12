@@ -16,13 +16,10 @@ import pandas as pd
 import os
 
 # Set environment variables
-# os.environ['PYSPARK_PYTHON'] = '/Users/naved/opt/miniconda3/envs/nlp/bin/python'
-# os.environ['PYSPARK_DRIVER_PYTHON'] = '/Users/naved/opt/miniconda3/envs/nlp/bin/python'
-
 os.environ['PYSPARK_PYTHON'] = '~/miniconda3/envs/hc_nlp_2/bin/python'
 os.environ['PYSPARK_DRIVER_PYTHON'] = '~/miniconda3/envs/hc_nlp_2/bin/python'
 
-from pyspark.pandas import read_csv
+import pyspark.pandas as ps
 from pyspark.sql.types import StringType, FloatType
 
 
@@ -79,8 +76,8 @@ import pyspark.sql.functions as F
 import pandas as pd
 
 
-def get_patient_sample() -> Tuple['pyspark.pandas.series.Series[int]', 'pyspark.pandas.frame.DataFrame', 'pyspark.pandas.frame.DataFrame']:
-    patients = read_csv(PATIENTS_PATH)
+def get_patient_sample() -> Tuple['ps.series.Series[int]', 'ps.frame.DataFrame', 'ps.frame.DataFrame']:
+    patients = ps.read_csv(PATIENTS_PATH)
     sample_ids = patients.SUBJECT_ID
     # Moratality set
     deceased_patients = patients[patients.EXPIRE_FLAG == 1] 
@@ -93,10 +90,10 @@ def get_patient_sample() -> Tuple['pyspark.pandas.series.Series[int]', 'pyspark.
     return sample_ids, patients, deceased_patients
 
 
-def _get_data_for_sample(patient_ids: 'pyspark.pandas.series.Series[int]', file_name: str) -> 'pyspark.pandas.frame.DataFrame':
+def _get_data_for_sample(patient_ids: 'ps.series.Series[int]', file_name: str) -> 'ps.frame.DataFrame':
 	'''Get the data only relevant for the sample.'''
 	full_path = RAW_BASE_PATH.format(fname=file_name)
-	raw = read_csv(full_path)
+	raw = ps.read_csv(full_path)
 	# Drop rows that do not include an approved `result_name` from the Inclusion List
 	raw = raw.to_spark()
 	patient_ids = patient_ids.to_dataframe().to_spark()
@@ -175,7 +172,7 @@ all_notes_cols = [
 	'TEXT'
 ]
 
-def preprocess(patient_ids: 'pyspark.pandas.series.Series[int]') -> Tuple['pyspark.pandas.frame.DataFrame', 'pyspark.pandas.frame.DataFrame', 'pyspark.pandas.frame.DataFrame', 'pyspark.pandas.frame.DataFrame']:
+def preprocess(patient_ids: 'ps.series.Series[int]') -> Tuple['ps.frame.DataFrame', 'ps.frame.DataFrame', 'ps.frame.DataFrame', 'ps.frame.DataFrame']:
 	''' Returns preprocessed dfs containg records for @patient_ids
 	'''
 	#### Admissions
@@ -228,7 +225,7 @@ def preprocess(patient_ids: 'pyspark.pandas.series.Series[int]') -> Tuple['pyspa
 
 	# cleanse aphanums from dose
 	meds_sp = meds_sp.withColumn('DOSE_VAL_RX', F.regexp_replace(F.col('DOSE_VAL_RX'), '[A-Za-z,>< ]', ''))
-	meds_sp = meds_sp.select(*all_meds_cols, F.split(F.col('DOSE_VAL_RX'), '-').alias('dose_arr_temp'))
+	meds_sp = meds_sp.select(*all_cols3_2 + ['STARTDATE'], F.split(F.col('DOSE_VAL_RX'), '-').alias('dose_arr_temp'))
 	meds_sp = meds_sp.withColumn('dose_arr_temp', F.col('dose_arr_temp').cast('array<float>'))
 
     #TODO Need to handle: ['50/500', '250/50', '500//50', '800/160', '-0.5-2', '0.3%', 'About-CM1000', 'one', '500/50', '12-', '-15-30', '1%', 'Hold Dose', '1.25/3', '1%', ': 5-10', '0.63/3', '0.63/3', '20-', '1.26mg/6', '1.26mg/6', '0.63 mg/3', '1.2/1']
@@ -276,36 +273,50 @@ def preprocess(patient_ids: 'pyspark.pandas.series.Series[int]') -> Tuple['pyspa
 
 
 ## Feature engr. helpers
-def define_train_period(deceased_to_date: 'pyspark.pandas.frame.DataFrame', *feature_sets: List['pyspark.pandas.frame.DataFrame'],
+def define_train_period(deceased_to_date: 'ps.frame.DataFrame', *feature_sets: List['ps.frame.DataFrame'],
                         obs_w: int = OBSERVATION_WINDOW, 
-                        pred_w: int = PREDICTION_WINDOW) -> Tuple[Dict, Dict]:
-    '''Create SUBJECT_ID -> earliest_date and SUBJECT_ID -> last date dicts.'''
-    cols = ['SUBJECT_ID', 'DATE']
+                        pred_w: int = PREDICTION_WINDOW) -> Tuple['ps.frame.DataFrame', 'ps.frame.DataFrame']:
+	'''Create SUBJECT_ID -> earliest_date and SUBJECT_ID -> last date dfs.'''
+	cols = ['SUBJECT_ID', 'DATE']
+	# union of feature sets on 'SUBJECT_ID' and 'DATE'
+	all_feats = ps.concat([feats[cols] for feats in feature_sets])
 
 	
-    all_feats = pd.concat([feats[cols] for feats in feature_sets])
-    last_date_base = all_feats.groupby('SUBJECT_ID').DATE.max()
-    last_date = {subj_id: date
-                 for subj_id, date in last_date_base.items()
-                 if subj_id not in deceased_to_date}
+	## TODO WIP pyspark version 
+	# last_date_base = all_feats.groupby('SUBJECT_ID').DATE.max()
+# 	last_date_base_sp = last_date_base.to_frame().reset_index().to_spark()
+# 	deceased_to_date_sp = deceased_to_date.to_spark()
+# 	last_date_sp = last_date_base_sp.join(F.broadcast(deceased_to_date_sp), last_date_base_sp.SUBJECT_ID == deceased_to_date_sp.SUBJECT_ID, 'left_outer')
+# 	# TODO need to merge/decide on SUBJ_ID??
+# 	last_date_sp2 = last_date_sp.drop(deceased_to_date_sp.SUBJECT_ID).drop('DOD')
+
+# 	subtracted_pred_w_sp = deceased_to_date_sp.withColumn('DATE', F.date_sub(F.col('DOD'), pred_w)).drop('DOD')
+# 	last_date_sp_j = last_date_sp.join(F.broadcast(subtracted_pred_w_sp), last_date_sp.SUBJECT_ID == subtracted_pred_w_sp.SUBJECT_ID, 'left_anti')
+# 	last_date_sp_j = last_date_sp_j.drop(last_date_sp.SUBJECT_ID)
+
+#  ## TODO
+# 	last_date = last_date_sp_j.to_pandas_on_spark()
+# 	subtracted_pred_w = subtracted_pred_w_sp.to_pandas_on_spark()
+# 	last_date.update(subtracted_pred_w)
+
+# 	earliest_date_sp = last_date_sp.select('SUBJECT_ID', F.date_sub(F.col('DATE'), obs_w).alias('DATE'))
+# 	earliest_date = earliest_date_sp.to_pandas_on_spark()
+#####################
+	last_date_base = all_feats.groupby('SUBJECT_ID').DATE.max().to_dict()
+	last_date = {subj_id: date
+				for subj_id, date in last_date_base.items()
+				if subj_id not in deceased_to_date}
+	subtracted_pred_w = {subj_id: date - dt.timedelta(days=pred_w)
+						for subj_id, date in deceased_to_date.items()}
+	last_date.update(subtracted_pred_w)
+	earliest_date = {subj_id: date - dt.timedelta(days=obs_w)
+					for subj_id, date in last_date.items()}
+	return earliest_date, last_date
+
+	return (earliest_date, last_date)
 
 
-
-
-
-
-
-	
-
-    subtracted_pred_w = {subj_id: date - dt.timedelta(days=pred_w)
-                         for subj_id, date in deceased_to_date.items()}
-    last_date.update(subtracted_pred_w)
-    earliest_date = {subj_id: date - dt.timedelta(days=obs_w)
-                     for subj_id, date in last_date.items()}
-    return earliest_date, last_date
-
-
-def _clean_up_feature_sets(*feature_sets: List[pd.DataFrame], earliest_date: dict, last_date: dict) -> List[pd.DataFrame]:
+def _clean_up_feature_sets(*feature_sets: List['pyspark.pandas.frame.DataFrame'], earliest_date: 'ps.frame.DataFrame', last_date: 'ps.frame.DataFrame') -> List['pyspark.pandas.frame.DataFrame']:
     '''Leave only features from inside the observation window.'''
     results = []
     for feats in feature_sets:
@@ -420,6 +431,7 @@ def main():
     feature_sets = [diag_preprocessed, lab_preprocessed, meds_preprocessed]
 
     earliest_date, last_date = define_train_period(deceased_to_date, *feature_sets)
+
     # Choose last note for each patient
     last_note = get_last_note(patient_ids, notes_preprocessed, earliest_date, last_date, as_tokenized=False)
 
