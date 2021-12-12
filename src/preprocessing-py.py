@@ -27,7 +27,7 @@ PATH_PROCESSED = '../data/processed/'
 DIAG_PATH = RAW_BASE_PATH.format(fname=DIAGNOSES_FNAME)
 PATIENTS_PATH = RAW_BASE_PATH.format(fname=PATIENTS_FNAME)
 
-PATIENT_SAMPLE_SIZE = 46520 # total is 46520
+PATIENT_SAMPLE_SIZE = 1000 # total is 46520
 TRAIN_SIZE = 0.8
 # We need to take into account only the events that happened during the observation window. The end of observation window is N days before death for deceased patients and date of last event for alive patients. We can have several sets of events (e.g. labs, diags, meds), so we need to choose the latest date out of those.
 # OBSERVATION_WINDOW = 2000
@@ -89,20 +89,13 @@ def _find_mean_dose(dose: str) -> Union[float, None]:
         return 0
     try:
         cleaned = re.sub(r'[A-Za-z,>< ]', '', dose)
-        # print('====')
-        # print(dose)
-        # print(cleaned)
         parts = cleaned.split('-')
-        # print(parts)
-        mean = np.array(parts).astype(float).mean()
-        # print(mean)
-        return mean
+        return np.array(parts).astype(float).mean()
     except:
         # print(dose) # TODO fix to address the following conditions in src data:
         # ['50/500', '250/50', '500//50', '800/160', '-0.5-2', '0.3%', 'About-CM1000', 'one', '500/50', '12-', '-15-30', '1%', 'Hold Dose', '1.25/3', '1%', ': 5-10', '0.63/3', '0.63/3', '20-', '1.26mg/6', '1.26mg/6', '0.63 mg/3', '1.2/1']
         return None
         
-
 
 def _clean_text(note: str) -> str:
     cleaned = re.sub(r'[^\w]', ' ', note).replace('_', ' ')
@@ -168,7 +161,7 @@ def preprocess(patient_ids: Set[int]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Da
 
 
 ## Feature engr. helpers
-def define_train_period(deceased_to_date: pd.Series, *feature_sets: List['pyspark.pandas.frame.DataFrame'], 
+def define_train_period(deceased_to_date: pd.Series, *feature_sets: List[pd.DataFrame], 
                         obs_w: int = OBSERVATION_WINDOW, 
                         pred_w: int = PREDICTION_WINDOW) -> Tuple[Dict, Dict]:
     '''Create SUBJECT_ID -> earliest_date and SUBJECT_ID -> last date dicts.'''
