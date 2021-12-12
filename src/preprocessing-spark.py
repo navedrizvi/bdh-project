@@ -264,7 +264,7 @@ def preprocess(patient_ids: 'pyspark.pandas.series.Series[int]') -> Tuple['pyspa
 	notes_preprocessed_sp = notes_preprocessed_sp.withColumn('CLEAN_TEXT', F.regexp_replace(F.col('CLEAN_TEXT'), '[^\w]', ' ')).drop('TEXT')
 	notes_preprocessed_sp = notes_preprocessed_sp.withColumn('CLEAN_TEXT', F.regexp_replace(F.col('CLEAN_TEXT'), '_', ' '))
 	notes_preprocessed_sp = notes_preprocessed_sp.withColumn('CLEAN_TEXT', F.regexp_replace(F.col('CLEAN_TEXT'), ' +', ' '))
-	notes_preprocessed_sp = notes_preprocessed_sp.select('*', F.lower(F.col('CLEAN_TEXT')))
+	notes_preprocessed_sp = notes_preprocessed_sp.select(*all_notes_cols + ['CLEAN_TEXT'], F.lower(F.col('CLEAN_TEXT')).alias('CLEAN_TEXT'))
 	notes_preprocessed = notes_preprocessed_sp.to_pandas_on_spark()
 	print('done processing notes')
 
