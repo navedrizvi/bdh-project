@@ -1,3 +1,6 @@
+'''
+Derived from preprocessing-py.py to run in Spark for parallelism
+'''
 import os
 from typing import Dict, List, NamedTuple, Set, Tuple, Union
 import re
@@ -7,10 +10,17 @@ from collections import Counter
 
 # from tqdm.auto import tqdm
 # import numpy as np
-# import pandas as pd
+import pandas as pd
 # from sklearn.model_selection import train_test_split
 # from sklearn.feature_extraction.text import TfidfVectorizer
+import os
+
+# Set environment variables
+os.environ['PYSPARK_PYTHON'] = '/Users/naved/opt/miniconda3/envs/nlp/bin/python'
+os.environ['PYSPARK_DRIVER_PYTHON'] = '/Users/naved/opt/miniconda3/envs/nlp/bin/python'
+
 from pyspark.pandas import read_csv
+from pyspark.sql.types import StringType, FloatType
 
 
 # Input files
@@ -62,13 +72,11 @@ grp6 = [
 relevant_diag_codes: List[int] = [*acute_diag_codes, *other_resp_tract_diag_codes, *pneumonia_and_influenza_diag_codes, *grp4, *grp5, *grp6]
 RELEVANT_DIAG_CODES = [str(e) for e in relevant_diag_codes]
 
-from pyspark.sql.functions import to_timestamp, to_date, substring
-import pyspark
+import pyspark.sql.functions as F
 import pandas as pd
-import numpy as np
 
 
-def get_patient_sample() -> Tuple[pyspark.pandas.series.Series[int], pyspark.pandas.frame.DataFrame, pyspark.pandas.frame.DataFrame]:
+def get_patient_sample() -> Tuple['pyspark.pandas.series.Series[int]', 'pyspark.pandas.frame.DataFrame', 'pyspark.pandas.frame.DataFrame']:
     patients = read_csv(PATIENTS_PATH)
     sample_ids = patients.SUBJECT_ID
     # Moratality set
@@ -76,88 +84,191 @@ def get_patient_sample() -> Tuple[pyspark.pandas.series.Series[int], pyspark.pan
     deceased_patients = deceased_patients[['SUBJECT_ID', 'DOD']]
     # first 10 characters of DOD column is date (we're ignoring time)
     deceased_patients = deceased_patients.to_spark()
-    deceased_patients = deceased_patients.select('SUBJECT_ID', substring('DOD', 0, 10).alias('DOD'))
+    deceased_patients = deceased_patients.select('SUBJECT_ID', F.substring('DOD', 0, 10).alias('DOD'))
     deceased_patients = deceased_patients.to_pandas_on_spark()
 
     return sample_ids, patients, deceased_patients
 
 
-def _get_data_for_sample(patient_ids: pyspark.pandas.series.Series[int], file_name: str) -> pyspark.pandas.frame.DataFrame:
-    '''Get the data only relevant for the sample.'''
-    full_path = RAW_BASE_PATH.format(fname=file_name)
-    raw = read_csv(path=full_path)
-    # TODO broadcast patient_ids
-    relevant_data = raw[raw.EXPIRE_FLAG in patient_ids] 
-    # return pd.concat([chunk[chunk.SUBJECT_ID.isin(patient_ids)]])
-    return relevant_data
+def _get_data_for_sample(patient_ids: 'pyspark.pandas.series.Series[int]', file_name: str) -> 'pyspark.pandas.frame.DataFrame':
+	'''Get the data only relevant for the sample.'''
+	full_path = RAW_BASE_PATH.format(fname=file_name)
+	raw = read_csv(full_path)
+	# Drop rows that do not include an approved `result_name` from the Inclusion List
+	raw = raw.to_spark()
+	patient_ids = patient_ids.to_dataframe().to_spark()
+	relevant_data = raw.join(F.broadcast(patient_ids), raw.SUBJECT_ID == patient_ids.SUBJECT_ID, 'left_semi')
+	relevant_data = relevant_data.to_pandas_on_spark()
+
+	return relevant_data
 
 
-def _find_mean_dose(dose: str) -> Union[float, None]:
-    if pd.isnull(dose):
-        return 0
-    try:
-        cleaned = re.sub(r'[A-Za-z,>< ]', '', dose)
-        parts = cleaned.split('-')
-        return np.array(parts).astype(float).mean()
-    except:
-        # print(dose) # TODO fix to address the following conditions in src data:
-        # ['50/500', '250/50', '500//50', '800/160', '-0.5-2', '0.3%', 'About-CM1000', 'one', '500/50', '12-', '-15-30', '1%', 'Hold Dose', '1.25/3', '1%', ': 5-10', '0.63/3', '0.63/3', '20-', '1.26mg/6', '1.26mg/6', '0.63 mg/3', '1.2/1']
-        return None
-        
+# ROW_ID: int, SUBJECT_ID: int, HADM_ID: int, ADMITTIME: string, DISCHTIME: string, DEATHTIME: string, ADMISSION_TYPE: string, ADMISSION_LOCATION: string, DISCHARGE_LOCATION: string, INSURANCE: string, LANGUAGE: string, RELIGION: string, MARITAL_STATUS: string, ETHNICITY: string, EDREGTIME: string, EDOUTTIME: string, DIAGNOSIS: string, HOSPITAL_EXPIRE_FLAG: int, HAS_CHARTEVENTS_DATA: int, ADMITTIME: string
+all_admissions_cols = [
+	'ROW_ID',
+	'SUBJECT_ID',
+	'HADM_ID',
+	'ADMITTIME',
+	'DISCHTIME',
+	'DEATHTIME',
+	'ADMISSION_TYPE',
+	'ADMISSION_LOCATION',
+	'DISCHARGE_LOCATION',
+	'INSURANCE',
+	'LANGUAGE',
+	'RELIGION',
+	'MARITAL_STATUS',
+	'ETHNICITY',
+	'EDREGTIME',
+	'EDOUTTIME',
+	'DIAGNOSIS',
+	'HOSPITAL_EXPIRE_FLAG',
+	'HAS_CHARTEVENTS_DATA',
+]
 
-def _clean_text(note: str) -> str:
-    cleaned = re.sub(r'[^\w]', ' ', note).replace('_', ' ')
-    removed_spaces = re.sub(' +', ' ', cleaned)
-    lower = removed_spaces.lower()
-    return lower
+all_lab_results_cols = [
+	'ROW_ID',
+	'SUBJECT_ID',
+	'HADM_ID',
+	'ITEMID',
+	'VALUE',
+	'VALUENUM',
+	'VALUEUOM',
+	'FLAG',
+]
 
+all_meds_cols = [
+	'ROW_ID',
+	'SUBJECT_ID',
+	'HADM_ID',
+	'ICUSTAY_ID',
+	'STARTDATE',
+	'ENDDATE',
+	'DRUG_TYPE',
+	'DRUG',
+	'DRUG_NAME_POE',
+	'DRUG_NAME_GENERIC',
+	'FORMULARY_DRUG_CD',
+	'GSN',
+	'NDC',
+	'PROD_STRENGTH',
+	'DOSE_VAL_RX',
+	'DOSE_UNIT_RX',
+	'FORM_VAL_DISP',
+	'FORM_UNIT_DISP',
+	'ROUTE'
+]
+all_notes_cols = [
+	'ROW_ID',
+	'SUBJECT_ID',
+	'HADM_ID',
+	'ICUSTAY_ID',
+	'STARTDATE',
+	'ENDDATE',
+	'DRUG_TYPE',
+	'DRUG',
+	'DRUG_NAME_POE',
+	'DRUG_NAME_GENERIC',
+	'FORMULARY_DRUG_CD',
+	'GSN',
+	'NDC',
+	'PROD_STRENGTH',
+	'DOSE_VAL_RX',
+	'DOSE_UNIT_RX',
+	'FORM_VAL_DISP',
+	'FORM_UNIT_DISP',
+	'ROUTE'
+]
 
-def preprocess(patient_ids: pyspark.pandas.series.Series[int]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    ''' Returns preprocessed dfs containg records for @patient_ids
-    '''
-    admissions = _get_data_for_sample(patient_ids, ADMISSIONS_FNAME)
-    lab_results = _get_data_for_sample(patient_ids, LABEVENTS_FNAME)
-    diagnoses = _get_data_for_sample(patient_ids, DIAGNOSES_FNAME)
-    meds = _get_data_for_sample(patient_ids, PRESCRIPTIONS_FNAME)
-    notes_preprocessed = _get_data_for_sample(patient_ids, NOTES_FNAME)
+def preprocess(patient_ids: 'pyspark.pandas.series.Series[int]') -> Tuple['pyspark.pandas.frame.DataFrame', 'pyspark.pandas.frame.DataFrame', 'pyspark.pandas.frame.DataFrame', 'pyspark.pandas.frame.DataFrame']:
+	''' Returns preprocessed dfs containg records for @patient_ids
+	'''
+	#### Admissions
+	admissions = _get_data_for_sample(patient_ids, ADMISSIONS_FNAME)
+	# first 10 characters of DOD column is date (we're ignoring time)
+	admissions_sp = admissions.to_spark()
+	all_cols = [col for col in all_admissions_cols if col != 'ADMITTIME']
+	admissions_sp = admissions_sp.select(*all_cols, F.substring('ADMITTIME', 0, 10).alias('ADMITTIME'))
+	admissions = admissions_sp.to_pandas_on_spark()
+	print('done processing admissions')
 
-    admissions['ADMITTIME'] = pd.to_datetime(admissions.ADMITTIME).dt.date
-    print('done processing admissions')
-    #### Diagnoses
-
-    diagnoses['ICD9_CODE'] = 'ICD9_' + diagnoses['ICD9_CODE']
-    adm_cols = ['SUBJECT_ID', 'HADM_ID', 'ADMITTIME']
-    diagnoses = diagnoses.merge(admissions[adm_cols], on=['SUBJECT_ID', 'HADM_ID'])
-    dropper = ['ROW_ID', 'SEQ_NUM', 'HADM_ID']
-    renamer = {'ICD9_CODE': 'FEATURE_NAME', 'ADMITTIME': 'DATE'}
-    diag_preprocessed = diagnoses.drop(columns=dropper).rename(columns=renamer)
-    diag_preprocessed['VALUE'] = 1
-    print('done processing diags')
+	#### Diagnoses
+	diagnoses = _get_data_for_sample(patient_ids, DIAGNOSES_FNAME)
+	diagnoses['ICD9_CODE'] = 'ICD9_' + diagnoses['ICD9_CODE']
+	adm_cols = ['SUBJECT_ID', 'HADM_ID', 'ADMITTIME']
+	diagnoses = diagnoses.merge(admissions[adm_cols], on=['SUBJECT_ID', 'HADM_ID'])
+	dropper = ['ROW_ID', 'SEQ_NUM', 'HADM_ID']
+	renamer = {'ICD9_CODE': 'FEATURE_NAME', 'ADMITTIME': 'DATE'}
+	diag_preprocessed = diagnoses.drop(columns=dropper).rename(columns=renamer)
+	diag_preprocessed['VALUE'] = 1
+	print('done processing diags')
 
     #### Labs
-    lab_results['DATE'] = pd.to_datetime(lab_results['CHARTTIME']).dt.date
-    lab_results['FEATURE_NAME'] = 'LAB_' + lab_results['ITEMID'].astype(str)
-    dropper = ['ROW_ID', 'HADM_ID', 'VALUE', 'VALUEUOM', 'FLAG', 'ITEMID', 'CHARTTIME']
-    renamer = {'VALUENUM': 'VALUE'}
-    lab_preprocessed = lab_results.drop(columns=dropper).rename(columns=renamer)
-    print('done processing labs')
+	lab_results = _get_data_for_sample(patient_ids, LABEVENTS_FNAME)
+	# first 10 characters of DOD column is date (we're ignoring time)
+	lab_results_sp = lab_results.to_spark()
+	# renames CHARTTIME to DATE
+	all_cols2 = [col for col in all_lab_results_cols if col != 'CHARTTIME']
+	lab_results_sp = lab_results_sp.select(*all_cols2, F.substring('CHARTTIME', 0, 10).alias('DATE'))
+	lab_results_sp = lab_results_sp.withColumn('FEATURE_NAME', F.concat(F.lit('LAB_'), F.col('ITEMID').cast(StringType())))
+	lab_results = lab_results_sp.to_pandas_on_spark()
+	dropper = ['ROW_ID', 'HADM_ID', 'VALUE', 'VALUEUOM', 'FLAG', 'ITEMID', 'CHARTTIME']
+	renamer = {'VALUENUM': 'VALUE'}
+	lab_preprocessed = lab_results.drop(columns=dropper).rename(columns=renamer)
+	print('done processing labs')
 
-    #### Meds
-    meds = meds[meds.ENDDATE.notna()]
-    meds['DATE'] = pd.to_datetime(meds['ENDDATE']).dt.date
-    meds['VALUE'] = meds['DOSE_VAL_RX'].map(_find_mean_dose)
-    meds['FEATURE_NAME'] = 'MED_' + meds['GSN'].astype(str)
-    dropper = [col for col in meds.columns if col not in {'SUBJECT_ID', 'DATE', 'FEATURE_NAME', 'VALUE'}]
-    meds_preprocessed = meds.drop(columns=dropper).rename(columns=renamer)
-    print('done processing meds')
+	#### Meds
+	meds = _get_data_for_sample(patient_ids, PRESCRIPTIONS_FNAME)
+	meds = meds[meds.ENDDATE.notna()]
+	meds['DOSE_VAL_RX'] = meds['DOSE_VAL_RX'].fillna(0)
 
-    # Here we can preprocess notes. Later the same things can be done using Spark # TODO 2
-    #### Notes
-    notes_preprocessed['DATE'] = pd.to_datetime(notes_preprocessed['CHARTDATE']).dt.date
-    notes_preprocessed['CLEAN_TEXT'] = notes_preprocessed['TEXT'].map(_clean_text)
-    print('done processing notes')
 
-    return diag_preprocessed, lab_preprocessed, meds_preprocessed, notes_preprocessed
+	meds_sp = meds.to_spark()
+
+	# renames ENDDATE to DATE
+	all_cols3 = [col for col in all_meds_cols if col != 'ENDDATE']
+	meds_sp = meds_sp.select(*all_cols3, F.substring('ENDDATE', 0, 10).alias('DATE'))
+	all_cols3_2 = [col for col in all_cols3 if col != 'STARTDATE'] + ['DATE']
+	meds_sp = meds_sp.select(*all_cols3_2, F.substring('STARTDATE', 0, 10).alias('STARTDATE'))
+
+	# cleanse aphanums from dose
+	meds_sp = meds_sp.withColumn('DOSE_VAL_RX', F.regexp_replace(F.col('DOSE_VAL_RX'), '[A-Za-z,>< ]', ''))
+	meds_sp = meds_sp.select(*all_meds_cols, F.split(F.col('DOSE_VAL_RX'), '-').alias('dose_arr_temp'))
+	meds_sp = meds_sp.withColumn('dose_arr_temp', F.col('dose_arr_temp').cast('array<float>'))
+
+    #TODO Need to handle: ['50/500', '250/50', '500//50', '800/160', '-0.5-2', '0.3%', 'About-CM1000', 'one', '500/50', '12-', '-15-30', '1%', 'Hold Dose', '1.25/3', '1%', ': 5-10', '0.63/3', '0.63/3', '20-', '1.26mg/6', '1.26mg/6', '0.63 mg/3', '1.2/1']
+	query = '''aggregate(
+		`{col}`,
+		CAST(0.0 AS double),
+		(acc, x) -> acc + x,
+		acc -> acc / size(`{col}`)
+	) AS  `{new_col}`'''.format(col='dose_arr_temp', new_col='VALUE')
+	meds_sp = meds_sp.selectExpr('*', query).drop('dose_arr_temp')
+
+
+	meds_sp = meds_sp.withColumn('FEATURE_NAME', F.concat(F.lit('MED_'), F.col('GSN').cast(StringType())))
+	meds = meds_sp.to_pandas_on_spark()
+
+	dropper = [col for col in meds.columns if col not in {'SUBJECT_ID', 'DATE', 'FEATURE_NAME', 'VALUE'}]
+	meds_preprocessed = meds.drop(columns=dropper).rename(columns=renamer)
+	print('done processing meds')
+
+	# Here we can preprocess notes. Later the same things can be done using Spark # TODO 2
+	#### Notes
+	notes_preprocessed = _get_data_for_sample(patient_ids, NOTES_FNAME)
+
+	notes_preprocessed_sp = notes_preprocessed.to_spark()
+	all_cols4 = [col for col in all_notes_cols if col != 'CHARTDATE']
+	notes_preprocessed_sp = notes_preprocessed_sp.select(*all_cols4, F.substring('CHARTDATE', 0, 10).alias('CHARTDATE'))
+
+	notes_preprocessed_sp = notes_preprocessed_sp.withColumn('CLEAN_TEXT', F.regexp_replace(F.col('CLEAN_TEXT'), '[^\w]', ' ')).drop('TEXT')
+	notes_preprocessed_sp = notes_preprocessed_sp.withColumn('CLEAN_TEXT', F.regexp_replace(F.col('CLEAN_TEXT'), '_', ' '))
+	notes_preprocessed_sp = notes_preprocessed_sp.withColumn('CLEAN_TEXT', F.regexp_replace(F.col('CLEAN_TEXT'), ' +', ' '))
+	notes_preprocessed_sp = notes_preprocessed_sp.select('*', F.lower(F.col('CLEAN_TEXT')))
+	notes_preprocessed = notes_preprocessed_sp.to_pandas_on_spark()
+	print('done processing notes')
+
+	return diag_preprocessed, lab_preprocessed, meds_preprocessed, notes_preprocessed
 ##########################
 
 ####### QA
@@ -296,24 +407,24 @@ def write_to_disk(deceased_to_date: Dict[int, dt.date], train_ids: Set[int], tes
 
 def main():
     # Get patient sample
-    sample_ids, patients_sample, deceased_to_date = get_patient_sample()
+    patient_ids, patients_sample, deceased_to_date = get_patient_sample()
     # get relevant MIMIC data for sample
-    diag_preprocessed, lab_preprocessed, meds_preprocessed, notes_preprocessed = preprocess(sample_ids)
+    diag_preprocessed, lab_preprocessed, meds_preprocessed, notes_preprocessed = preprocess(patient_ids)
     use_feature_sets = [diag_preprocessed, lab_preprocessed, meds_preprocessed]
 
     earliest_date, last_date = define_train_period(deceased_to_date, *use_feature_sets)
     # Choose last note for each patient
-    last_note = get_last_note(sample_ids, notes_preprocessed, earliest_date, last_date, as_tokenized=False)
+    last_note = get_last_note(patient_ids, notes_preprocessed, earliest_date, last_date, as_tokenized=False)
 
     ### Add transformer embeddings used in pretrained model
-    last_note_tokenized = get_last_note(sample_ids, notes_preprocessed, earliest_date, last_date, as_tokenized=True)
+    last_note_tokenized = get_last_note(patient_ids, notes_preprocessed, earliest_date, last_date, as_tokenized=True)
 
     # All features in feature_prepocessed form are features with columns ['SUBJECT_ID', 'FEATURE_NAME', 'DATE', 'VALUE], which can be later used for any of the aggregations we'd like.
 
     ### Feature construction
     # We are going to do a train test split based on patients to validate our model. We will only use those features that appear in the train set. Also, we will only use features that are shared between many patients (we will define 'many' manually for each of the feature sets).  
     # This way we will lose some patients who don't have 'popular' features, but that's fine since our goal is to compare similar patients, not to train the best model.
-    train_ids, test_ids = train_test_split(list(sample_ids), train_size=TRAIN_SIZE, random_state=RANDOM_SEED)
+    train_ids, test_ids = train_test_split(list(patient_ids), train_size=TRAIN_SIZE, random_state=RANDOM_SEED)
     diag, lab, med = _clean_up_feature_sets(*use_feature_sets, earliest_date=earliest_date, last_date=last_date)
 
     #### Feat calculations

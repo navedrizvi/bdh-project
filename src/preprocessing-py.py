@@ -1,3 +1,6 @@
+'''
+Script for preprocessing in single machine
+'''
 import os
 from typing import Dict, List, NamedTuple, Set, Tuple, Union
 import re
@@ -86,13 +89,20 @@ def _find_mean_dose(dose: str) -> Union[float, None]:
         return 0
     try:
         cleaned = re.sub(r'[A-Za-z,>< ]', '', dose)
+        print('====')
+        print(dose)
+        print(cleaned)
         parts = cleaned.split('-')
-        return np.array(parts).astype(float).mean()
+        print(parts)
+        mean = np.array(parts).astype(float).mean()
+        print(mean)
+        return mean
     except:
         # print(dose) # TODO fix to address the following conditions in src data:
         # ['50/500', '250/50', '500//50', '800/160', '-0.5-2', '0.3%', 'About-CM1000', 'one', '500/50', '12-', '-15-30', '1%', 'Hold Dose', '1.25/3', '1%', ': 5-10', '0.63/3', '0.63/3', '20-', '1.26mg/6', '1.26mg/6', '0.63 mg/3', '1.2/1']
         return None
         
+
 
 def _clean_text(note: str) -> str:
     cleaned = re.sub(r'[^\w]', ' ', note).replace('_', ' ')

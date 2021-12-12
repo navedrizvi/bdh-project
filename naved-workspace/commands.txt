@@ -9,3 +9,13 @@ nbdiff notebook_1.ipynb notebook_2.ipynb
 eg:  nbdiff-web First_iteration_v1.ipynb First_iteration_v2.ipynb 
 
 pip install pyspark PyArrow
+
+
+PYSPARK_PYTHON = /Users/naved/opt/miniconda3/envs/nlp/bin/python
+PYSPARK_DRIVER_PYTHON = /Users/naved/opt/miniconda3/envs/nlp/bin/python
+
+import os
+
+# Set environment variables
+os.environ['PYSPARK_PYTHON'] = '/Users/naved/opt/miniconda3/envs/nlp/bin/python'
+os.environ['PYSPARK_DRIVER_PYTHON'] = '/Users/naved/opt/miniconda3/envs/nlp/bin/python'
