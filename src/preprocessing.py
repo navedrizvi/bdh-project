@@ -76,7 +76,7 @@ import pyspark.sql.functions as F
 import pandas as pd
 
 
-def get_patient_sample() -> Tuple['ps.series.Series[int]', 'ps.frame.DataFrame', 'ps.frame.DataFrame']:
+def get_patient_sample() -> Tuple[ps.series.Series[int], ps.frame.DataFrame, ps.frame.DataFrame]:
     patients = ps.read_csv(PATIENTS_PATH)
     sample_ids = patients.SUBJECT_ID
     # Moratality set
@@ -90,7 +90,7 @@ def get_patient_sample() -> Tuple['ps.series.Series[int]', 'ps.frame.DataFrame',
     return sample_ids, patients, deceased_patients
 
 
-def _get_data_for_sample(patient_ids: 'ps.series.Series[int]', file_name: str) -> 'ps.frame.DataFrame':
+def _get_data_for_sample(patient_ids: ps.series.Series[int], file_name: str) -> ps.frame.DataFrame:
 	'''Get the data only relevant for the sample.'''
 	full_path = RAW_BASE_PATH.format(fname=file_name)
 	raw = ps.read_csv(full_path)
@@ -172,7 +172,7 @@ all_notes_cols = [
 	'TEXT'
 ]
 
-def preprocess(patient_ids: 'ps.series.Series[int]') -> Tuple['ps.frame.DataFrame', 'ps.frame.DataFrame', 'ps.frame.DataFrame', 'ps.frame.DataFrame']:
+def preprocess(patient_ids: ps.series.Series[int]) -> Tuple[ps.frame.DataFrame, ps.frame.DataFrame, ps.frame.DataFrame, ps.frame.DataFrame]:
 	''' Returns preprocessed dfs containg records for @patient_ids
 	'''
 	#### Admissions
@@ -274,7 +274,7 @@ def preprocess(patient_ids: 'ps.series.Series[int]') -> Tuple['ps.frame.DataFram
 
 ## Feature engr. helpers
 def define_train_period(deceased_to_date: 'ps.frame.DataFrame', *feature_sets: List['ps.frame.DataFrame'],
-                        obs_w: int = OBSERVATION_WINDOW, 
+                        obs_w: int = OBSERVATION_WINDOW,
                         pred_w: int = PREDICTION_WINDOW) -> Tuple['ps.series.Series', 'ps.series.Series']:
 	# '''Create SUBJECT_ID -> earliest_date and SUBJECT_ID -> last date dfs.'''
 	''' Returns DF with (EARLIEST_DATE, LAST_DATE_OR_DOD) for each patient SUBJECT_ID '''
