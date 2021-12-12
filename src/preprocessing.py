@@ -275,45 +275,36 @@ def preprocess(patient_ids: 'ps.series.Series[int]') -> Tuple['ps.frame.DataFram
 ## Feature engr. helpers
 def define_train_period(deceased_to_date: 'ps.frame.DataFrame', *feature_sets: List['ps.frame.DataFrame'],
                         obs_w: int = OBSERVATION_WINDOW, 
-                        pred_w: int = PREDICTION_WINDOW) -> Tuple['ps.frame.DataFrame', 'ps.frame.DataFrame']:
-	'''Create SUBJECT_ID -> earliest_date and SUBJECT_ID -> last date dfs.'''
+                        pred_w: int = PREDICTION_WINDOW) -> Tuple['ps.series.Series', 'ps.series.Series']:
+	# '''Create SUBJECT_ID -> earliest_date and SUBJECT_ID -> last date dfs.'''
+	''' Returns DF with (EARLIEST_DATE, LAST_DATE_OR_DOD) for each patient SUBJECT_ID '''
 	cols = ['SUBJECT_ID', 'DATE']
 	# union of feature sets on 'SUBJECT_ID' and 'DATE'
 	all_feats = ps.concat([feats[cols] for feats in feature_sets])
 
-	
-	## TODO WIP pyspark version 
-	# last_date_base = all_feats.groupby('SUBJECT_ID').DATE.max()
-# 	last_date_base_sp = last_date_base.to_frame().reset_index().to_spark()
-# 	deceased_to_date_sp = deceased_to_date.to_spark()
-# 	last_date_sp = last_date_base_sp.join(F.broadcast(deceased_to_date_sp), last_date_base_sp.SUBJECT_ID == deceased_to_date_sp.SUBJECT_ID, 'left_outer')
-# 	# TODO need to merge/decide on SUBJ_ID??
-# 	last_date_sp2 = last_date_sp.drop(deceased_to_date_sp.SUBJECT_ID).drop('DOD')
+	last_date_base = all_feats.groupby('SUBJECT_ID').DATE.max()
+	last_date_base_sp = last_date_base.to_frame().reset_index().to_spark()
+	deceased_to_date_sp = deceased_to_date.to_spark()
 
-# 	subtracted_pred_w_sp = deceased_to_date_sp.withColumn('DATE', F.date_sub(F.col('DOD'), pred_w)).drop('DOD')
+	deceased_to_date_sp = deceased_to_date_sp.withColumn('DOD_MINUS_PREDW', F.date_sub(F.col('DOD'), pred_w)).drop('DOD')
+	date_sp = last_date_base_sp.join(F.broadcast(deceased_to_date_sp), last_date_base_sp.SUBJECT_ID == deceased_to_date_sp.SUBJECT_ID, 'left_outer')
+	date_sp = date_sp.withColumn('LAST_DATE_OR_(DOD_MINUS_PREDW)', F.coalesce(F.col('DOD_MINUS_PREDW'), F.col('DATE')))
+	date_sp = date_sp.withColumn('EARLIEST_DATE',  F.date_sub(F.col('DATE'), obs_w))
+	date_sp = date_sp.drop(deceased_to_date_sp.SUBJECT_ID)
+
+	date = date_sp.to_pandas_on_spark()
+	return date['EARLIEST_DATE'], date['LAST_DATE_OR_(DOD_MINUS_PREDW)']
+
 # 	last_date_sp_j = last_date_sp.join(F.broadcast(subtracted_pred_w_sp), last_date_sp.SUBJECT_ID == subtracted_pred_w_sp.SUBJECT_ID, 'left_anti')
 # 	last_date_sp_j = last_date_sp_j.drop(last_date_sp.SUBJECT_ID)
-
-#  ## TODO
 # 	last_date = last_date_sp_j.to_pandas_on_spark()
 # 	subtracted_pred_w = subtracted_pred_w_sp.to_pandas_on_spark()
 # 	last_date.update(subtracted_pred_w)
 
 # 	earliest_date_sp = last_date_sp.select('SUBJECT_ID', F.date_sub(F.col('DATE'), obs_w).alias('DATE'))
 # 	earliest_date = earliest_date_sp.to_pandas_on_spark()
-#####################
-	last_date_base = all_feats.groupby('SUBJECT_ID').DATE.max().to_dict()
-	last_date = {subj_id: date
-				for subj_id, date in last_date_base.items()
-				if subj_id not in deceased_to_date}
-	subtracted_pred_w = {subj_id: date - dt.timedelta(days=pred_w)
-						for subj_id, date in deceased_to_date.items()}
-	last_date.update(subtracted_pred_w)
-	earliest_date = {subj_id: date - dt.timedelta(days=obs_w)
-					for subj_id, date in last_date.items()}
-	return earliest_date, last_date
 
-	return (earliest_date, last_date)
+	# return (earliest_date, last_date)
 
 
 def _clean_up_feature_sets(*feature_sets: List['pyspark.pandas.frame.DataFrame'], earliest_date: 'ps.frame.DataFrame', last_date: 'ps.frame.DataFrame') -> List['pyspark.pandas.frame.DataFrame']:
@@ -432,6 +423,7 @@ def main():
 
     earliest_date, last_date = define_train_period(deceased_to_date, *feature_sets)
 
+	#TODO from here
     # Choose last note for each patient
     last_note = get_last_note(patient_ids, notes_preprocessed, earliest_date, last_date, as_tokenized=False)
 
