@@ -16,8 +16,11 @@ import pandas as pd
 import os
 
 # Set environment variables
-os.environ['PYSPARK_PYTHON'] = '/Users/naved/opt/miniconda3/envs/nlp/bin/python'
-os.environ['PYSPARK_DRIVER_PYTHON'] = '/Users/naved/opt/miniconda3/envs/nlp/bin/python'
+# os.environ['PYSPARK_PYTHON'] = '/Users/naved/opt/miniconda3/envs/nlp/bin/python'
+# os.environ['PYSPARK_DRIVER_PYTHON'] = '/Users/naved/opt/miniconda3/envs/nlp/bin/python'
+
+os.environ['PYSPARK_PYTHON'] = '~/miniconda3/envs/hc_nlp_2/bin/python'
+os.environ['PYSPARK_DRIVER_PYTHON'] = '~/miniconda3/envs/hc_nlp_2/bin/python'
 
 from pyspark.pandas import read_csv
 from pyspark.sql.types import StringType, FloatType
@@ -162,22 +165,14 @@ all_notes_cols = [
 	'ROW_ID',
 	'SUBJECT_ID',
 	'HADM_ID',
-	'ICUSTAY_ID',
-	'STARTDATE',
-	'ENDDATE',
-	'DRUG_TYPE',
-	'DRUG',
-	'DRUG_NAME_POE',
-	'DRUG_NAME_GENERIC',
-	'FORMULARY_DRUG_CD',
-	'GSN',
-	'NDC',
-	'PROD_STRENGTH',
-	'DOSE_VAL_RX',
-	'DOSE_UNIT_RX',
-	'FORM_VAL_DISP',
-	'FORM_UNIT_DISP',
-	'ROUTE'
+	'CHARTDATE',
+	'CHARTTIME',
+	'STORETIME',
+	'CATEGORY',
+	'DESCRIPTION',
+	'CGID',
+	'ISERROR',
+	'TEXT'
 ]
 
 def preprocess(patient_ids: 'pyspark.pandas.series.Series[int]') -> Tuple['pyspark.pandas.frame.DataFrame', 'pyspark.pandas.frame.DataFrame', 'pyspark.pandas.frame.DataFrame', 'pyspark.pandas.frame.DataFrame']:
@@ -261,10 +256,11 @@ def preprocess(patient_ids: 'pyspark.pandas.series.Series[int]') -> Tuple['pyspa
 	all_cols4 = [col for col in all_notes_cols if col != 'CHARTDATE']
 	notes_preprocessed_sp = notes_preprocessed_sp.select(*all_cols4, F.substring('CHARTDATE', 0, 10).alias('CHARTDATE'))
 
-	notes_preprocessed_sp = notes_preprocessed_sp.withColumn('CLEAN_TEXT', F.regexp_replace(F.col('CLEAN_TEXT'), '[^\w]', ' ')).drop('TEXT')
+	notes_preprocessed_sp = notes_preprocessed_sp.withColumn('CLEAN_TEXT', F.regexp_replace(F.col('TEXT'), '[^\w]', ' ')).drop('TEXT')
 	notes_preprocessed_sp = notes_preprocessed_sp.withColumn('CLEAN_TEXT', F.regexp_replace(F.col('CLEAN_TEXT'), '_', ' '))
 	notes_preprocessed_sp = notes_preprocessed_sp.withColumn('CLEAN_TEXT', F.regexp_replace(F.col('CLEAN_TEXT'), ' +', ' '))
-	notes_preprocessed_sp = notes_preprocessed_sp.select(*all_notes_cols + ['CLEAN_TEXT'], F.lower(F.col('CLEAN_TEXT')).alias('CLEAN_TEXT'))
+	all_cols4_2 = [col for col in all_notes_cols if col != 'TEXT']
+	notes_preprocessed_sp = notes_preprocessed_sp.select(*all_cols4_2, F.lower(F.col('CLEAN_TEXT')).alias('CLEAN_TEXT'))
 	notes_preprocessed = notes_preprocessed_sp.to_pandas_on_spark()
 	print('done processing notes')
 
