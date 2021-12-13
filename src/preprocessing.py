@@ -407,12 +407,12 @@ def _write_spark_dfs_to_disk(deceased_to_date: ps.frame.DataFrame, train_ids: ps
     print('done writing meds_built')
 
     ###
-    labs_built_sp.write.mode('overwrite').csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'labs_built.csv'))
-    print('done writing labs_built')
     last_note_tokenized_sp.write.mode('overwrite').csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'last_note_tokenized.csv'))
     print('done writing last_note_tokenized')
     last_note_sp.write.mode('overwrite').csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'last_note.csv'))
     print('done writing last_note')
+    labs_built_sp.write.mode('overwrite').csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'labs_built.csv'))
+    print('done writing labs_built')
 
 
 def main():
