@@ -7,6 +7,8 @@ from typing import List, Tuple
 import pyspark.pandas as ps
 import pyspark.sql.types as T
 import pyspark.sql.functions as F
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
 import os
 
 # Set environment variables (both should point to same pythonpath)
@@ -244,6 +246,7 @@ def preprocess(patient_ids: ps.series.Series[int]) -> Tuple[ps.frame.DataFrame, 
     # rename to DATE for consistency
     notes_preprocessed_sp = notes_preprocessed_sp.withColumnRenamed('CHARTDATE', 'DATE')
     notes_preprocessed = notes_preprocessed_sp.to_pandas_on_spark()
+    
     print('done processing notes')
 
     return diag_preprocessed, lab_preprocessed, meds_preprocessed, notes_preprocessed
@@ -376,35 +379,33 @@ def build_feats(df: ps.frame.DataFrame, aggs: list, train_ids: ps.frame.DataFram
     return grouped
 
 
-def _write_spark_dfs_to_disk(deceased_to_date: ps.frame.DataFrame, train_ids: ps.frame.DataFrame, test_ids: ps.frame.DataFrame, last_note_tokenized: ps.frame.DataFrame, diag_built: ps.frame.DataFrame, labs_built: ps.frame.DataFrame, meds_built: ps.frame.DataFrame, last_note: ps.frame.DataFrame):
-    deceased_to_date_sp = deceased_to_date.to_spark()
-    train_ids_sp = train_ids.to_spark()
-    test_ids_sp = test_ids.to_spark()
-    diag_built_sp = diag_built.to_spark()
-    meds_build_sp = meds_built.to_spark()
+def pivot_aggregation(df_local: pd.DataFrame, fill_value: int = 0, use_sparse: bool = True) -> pd.DataFrame:
+    '''Make sparse pivoted table with SUBJECT_ID as index.'''
+    pivoted_local = df_local.unstack()
+    if fill_value is not None:
+        pivoted_local = pivoted_local.fillna(fill_value)
+    
+    if use_sparse:
+        pivoted_local = pivoted_local.astype(pd.SparseDtype('float', fill_value))
+    
+    pivoted_local.columns = [f'{col[-1]}_{col[1]}' for col in pivoted_local.columns]
+    return pivoted_local
+
+
+def _write_spark_dfs_to_disk(last_note_tokenized: ps.frame.DataFrame, labs_built: ps.frame.DataFrame, last_note: ps.frame.DataFrame):
     labs_built_sp = labs_built.to_spark()
     last_note_sp = last_note.to_spark()
     last_note_tokenized_sp = last_note_tokenized.to_spark()
 
-    deceased_to_date_sp.write.mode('overwrite').json(os.path.join(PATH_PROCESSED, 'spark-etl', 'deceased_to_date.json'))
-    print('done writing deceased_to_date')
-    train_ids_sp.write.mode('overwrite').json(os.path.join(PATH_PROCESSED, 'spark-etl', 'train_ids.json'))
-    print('done writing train_ids')
-    test_ids_sp.write.mode('overwrite').json(os.path.join(PATH_PROCESSED, 'spark-etl', 'test_ids.json'))
-    print('done writing test_ids')
-
-    diag_built_sp.write.mode('overwrite').csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'diag_built.csv'))
-    print('done writing diag_built')
-    meds_build_sp.write.mode('overwrite').csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'meds_built.csv'))
-    print('done writing meds_built')
-
     ###
-    labs_built_sp.write.mode('overwrite').csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'labs_built.csv'))
-    print('done writing labs_built')
-    last_note_tokenized_sp.write.mode('overwrite').csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'last_note_tokenized.csv'))
-    print('done writing last_note_tokenized')
     last_note_sp.write.mode('overwrite').csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'last_note.csv'))
     print('done writing last_note')
+
+    last_note_tokenized_sp.write.mode('overwrite').csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'last_note_tokenized.csv'))
+    print('done writing last_note_tokenized')
+
+    labs_built_sp.write.mode('overwrite').csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'labs_built.csv'))
+    print('done writing labs_built')
 
 
 def main():
@@ -434,13 +435,11 @@ def main():
 
     #### Feat calculations
     diag, lab, med = _clean_up_feature_sets(*feature_sets, date=date)
-    meds_built = build_feats(med, aggs=['mean', 'count'], train_ids=train_ids, low_thresh=50)
     # Diag requires custom handling
-    diag_built = build_feats(diag, aggs=None, train_ids=train_ids, low_thresh=30, is_diag=True)
     labs_built = build_feats(lab, aggs=['mean', 'max', 'min'], train_ids=train_ids, low_thresh=50)
 
-    _write_spark_dfs_to_disk(deceased_to_date, train_ids, test_ids, last_note_tokenized, diag_built, labs_built, meds_built, last_note)
+    _write_spark_dfs_to_disk(last_note_tokenized, labs_built, last_note)
 
     # Feeds diag_built, labs_built, meds_built, last_note to preprocessing.py
     # deceased_to_date, train_ids, test_ids, last_note_tokenized are for testing
-    return deceased_to_date, train_ids, test_ids, last_note_tokenized, diag_built, labs_built, meds_built, last_note
+    # return deceased_to_date, train_ids, test_ids, last_note_tokenized, diag_built, labs_built, meds_built, last_note
