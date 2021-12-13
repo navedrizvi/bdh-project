@@ -9,11 +9,11 @@ New medical studies provide a rich source of material for doctors that can be ut
 
 All project related files are contained in the `src` directory.
 
-1. [`ivan-workspace\First_iteration.ipynb`](ivan-workspace\First_iteration.ipynb): Jupyter notebook containing results of the study.
-2. [`src\preprocessing.py`](src\preprocessing.py): PySpark script containing the preprocessing logic and is meant to run in a Spark cluster.
-3. [`src\preprocessing2.py`](src\preprocessing2.py): Python script for feature preprocessing. (downstream to #2)
-4. [`src\ml.py`](src\ml.py): Python script containing the ML model training logic (derived from analysis in #1). (downstream to #3)
-5. [`src\preprocessing-py.py`](src\preprocessing-py.py): (not a main component of this project) Python script used for preprocessing data sample suitable in size to load on a single machine.
+1. [`ivan-workspace\First_iteration.ipynb`](https://github.com/navedrizvi/bdh-project/blob/main/ivan-workspace/First_iteration.ipynb): Jupyter notebook containing results of the study.
+2. [`src\preprocessing.py`](https://github.com/navedrizvi/bdh-project/blob/main/src/preprocessing.py): PySpark script containing the preprocessing logic and is meant to run in a Spark cluster.
+3. [`src\preprocessing2.py`](https://github.com/navedrizvi/bdh-project/blob/main/src/preprocessing2.py): Python script for feature preprocessing. (downstream to #2)
+4. [`src\ml.py`](https://github.com/navedrizvi/bdh-project/blob/main/src/ml.py): Python script containing the ML model training logic (derived from analysis in #1). (downstream to #3)
+5. [`src\preprocessing-py.py`](https://github.com/navedrizvi/bdh-project/blob/main/src/preprocessing-py.py): (not a main component of this project) Python script used for preprocessing data sample suitable in size to load on a single machine.
 
 The outputs of `preprocessing.py` and `preprocessing2.py` will appear under `data/processed/spark-etl/` and `data/processed/spark-processed-features/`
 
