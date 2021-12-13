@@ -8,19 +8,7 @@ import pandas as pd
 import pyspark.pandas as ps
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-# Input files
-RAW_BASE_PATH = '../data/raw/{fname}'
-ADMISSIONS_FNAME =  'ADMISSIONS.csv.gz'
-DIAGNOSES_FNAME = 'DIAGNOSES_ICD.csv.gz'
-LABEVENTS_FNAME = 'LABEVENTS.csv.gz'
-PRESCRIPTIONS_FNAME = 'PRESCRIPTIONS.csv.gz'
-PATIENTS_FNAME = 'PATIENTS.csv.gz'
-NOTES_FNAME = 'NOTEEVENTS.csv.gz'
-
 PATH_PROCESSED = '../data/processed/'
-
-DIAG_PATH = RAW_BASE_PATH.format(fname=DIAGNOSES_FNAME)
-PATIENTS_PATH = RAW_BASE_PATH.format(fname=PATIENTS_FNAME)
 
 
 def pivot_aggregation(df_local: pd.DataFrame, fill_value: int = None, use_sparse: bool = True) -> pd.DataFrame:
