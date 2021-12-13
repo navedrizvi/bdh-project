@@ -18,7 +18,7 @@ os.environ['PYSPARK_PYTHON'] = '~/miniconda3/envs/hc_nlp_2/bin/python'
 os.environ['PYSPARK_DRIVER_PYTHON'] = '~/miniconda3/envs/hc_nlp_2/bin/python'
 
 import pyspark.pandas as ps
-from pyspark.sql.types import StringType, FloatType
+from pyspark.sql.types import StringType, FloatType, BooleanType
 
 
 # Input files
@@ -252,11 +252,11 @@ def preprocess(patient_ids: ps.series.Series[int]) -> Tuple[ps.frame.DataFrame, 
     all_cols4 = [col for col in all_notes_cols if col != 'CHARTDATE']
     notes_preprocessed_sp = notes_preprocessed_sp.select(*all_cols4, F.substring('CHARTDATE', 0, 10).alias('CHARTDATE'))
 
-    notes_preprocessed_sp = notes_preprocessed_sp.withColumn('CLEAN_TEXT', F.regexp_replace(F.col('TEXT'), '[^\w]', ' ')).drop('TEXT')
+    notes_preprocessed_sp = notes_preprocessed_sp.withColumn('CLEAN_TEXT', F.regexp_replace(F.col('TEXT'), '[^\w]', ' '))
     notes_preprocessed_sp = notes_preprocessed_sp.withColumn('CLEAN_TEXT', F.regexp_replace(F.col('CLEAN_TEXT'), '_', ' '))
     notes_preprocessed_sp = notes_preprocessed_sp.withColumn('CLEAN_TEXT', F.regexp_replace(F.col('CLEAN_TEXT'), ' +', ' '))
-    all_cols4_2 = [col for col in all_notes_cols if col != 'TEXT']
-    notes_preprocessed_sp = notes_preprocessed_sp.select(*all_cols4_2, F.lower(F.col('CLEAN_TEXT')).alias('CLEAN_TEXT'))
+    # all_cols4_2 = [col for col in all_notes_cols if col != 'TEXT']
+    notes_preprocessed_sp = notes_preprocessed_sp.select(*all_notes_cols, F.lower(F.col('CLEAN_TEXT')).alias('CLEAN_TEXT'))
     # rename to DATE for consistency
     notes_preprocessed_sp = notes_preprocessed_sp.withColumnRenamed('CHARTDATE', 'DATE')
     notes_preprocessed = notes_preprocessed_sp.to_pandas_on_spark()
@@ -337,7 +337,8 @@ def get_last_note(patient_ids: ps.series.Series[int], notes_preprocessed: ps.fra
         ###
         # last_note = last_note[last_note.SUBJECT_ID.isin(patient_ids)]
         last_note_sp = last_note.to_spark()
-        last_note_sp = last_note_sp.join(F.broadcast(patient_ids), last_note_sp.SUBJECT_ID == patient_ids.SUBJECT_ID, 'left_semi') 
+        patient_ids_sp = patient_ids.to_dataframe().to_spark()
+        last_note_sp = last_note_sp.join(F.broadcast(patient_ids_sp), last_note_sp.SUBJECT_ID == patient_ids_sp.SUBJECT_ID, 'left_semi') 
         ##
 
         ## Prepare text for tokenizer
@@ -360,13 +361,14 @@ def get_last_note(patient_ids: ps.series.Series[int], notes_preprocessed: ps.fra
         ##
         # last_note = last_note[last_note.SUBJECT_ID.isin(patient_ids)]
         last_note_sp = last_note.to_spark()
-        last_note_sp = last_note_sp.join(F.broadcast(patient_ids), last_note_sp.SUBJECT_ID == patient_ids.SUBJECT_ID, 'left_semi') 
+        patient_ids_sp = patient_ids.to_dataframe().to_spark()
+        last_note_sp = last_note_sp.join(F.broadcast(patient_ids_sp), last_note_sp.SUBJECT_ID == patient_ids_sp.SUBJECT_ID, 'left_semi') 
         last_note = last_note_sp.to_pandas_on_spark()
         ##
     return last_note
 
 
-def build_feats(df: pd.DataFrame, agg: list, train_ids: list = None, low_thresh: int = None) -> pd.DataFrame:
+def build_feats(df: ps.frame.DataFrame, aggs: list, train_ids: ps.frame.DataFrame = None, low_thresh: int = None) -> ps.frame.DataFrame:
     '''Build feature aggregations for patient.
     
     Args:
@@ -378,28 +380,37 @@ def build_feats(df: pd.DataFrame, agg: list, train_ids: list = None, low_thresh:
     '''
     cols_to_use = ['SUBJECT_ID', 'FEATURE_NAME']
     # print(f'Total feats: {df.FEATURE_NAME.nunique()}')
+    df_sp = df.to_spark()
     if train_ids is not None:
-                ##
         # train_df = df[df.SUBJECT_ID.isin(train_ids)]
-        train_df_sp = df.to_spark()
-        train_df_sp = train_df_sp.join(F.broadcast(train_ids), train_df_sp.SUBJECT_ID == train_ids.SUBJECT_ID, 'left_semi') 
-        train_df = train_df_sp.to_pandas_on_spark()
+        train_ids_sp = train_ids.to_spark()
+        train_df_sp = df_sp.join(F.broadcast(train_ids_sp), df_sp.SUBJECT_ID == train_ids_sp.SUBJECT_ID, 'left_semi')
 
         ##
-        # train_feats = set(train_df.FEATURE_NAME) #py
         # df = df[df.FEATURE_NAME.isin(train_feats)]
-
+        df_sp = df_sp.join(F.broadcast(train_df_sp), df_sp.FEATURE_NAME == train_df_sp.FEATURE_NAME, 'left_semi')
+        df = df_sp.to_pandas_on_spark()
         ##
-        # print(f'Feats after leaving only train: {len(train_feats)}')
-        
     if low_thresh is not None:
         deduplicated = df.drop_duplicates(cols_to_use)
-        count: Dict[str, int] = Counter(deduplicated.FEATURE_NAME) #py
-        features_to_leave = set(feat for feat, cnt in count.items() if cnt > low_thresh) #py
-        df = df[df.FEATURE_NAME.isin(features_to_leave)]
+        ##
+        # Count freq. of FEATURE_NAME (categorical variable)
+        # count: Dict[str, int] = Counter(deduplicated.FEATURE_NAME) #py
+        # features_to_leave = set(feat for feat, cnt in count.items() if cnt > low_thresh) #py
+        count = deduplicated.FEATURE_NAME.value_counts()
+        count = count.to_frame().reset_index()
+        count = count.rename(columns={'FEATURE_NAME': 'COUNT_TMP', 'index': 'FEATURE_NAME'})
+        features_to_leave = count[count['COUNT_TMP'] > low_thresh]
         # print(f'Feats after removing rare: {len(features_to_leave)}')
+        ##
+        # df = df[df.FEATURE_NAME.isin(features_to_leave)]
+        features_to_leave_sp = features_to_leave.to_spark().drop('COUNT_TMP')
+        df_sp = df_sp.join(F.broadcast(features_to_leave_sp), df_sp.FEATURE_NAME == features_to_leave_sp.FEATURE_NAME, 'left_semi')
+        df = df_sp.to_pandas_on_spark()
+
     
-    grouped = df.groupby(cols_to_use).agg(agg)
+    grouped = df.groupby(cols_to_use).agg(aggs)
+
     return grouped
 
 
@@ -428,6 +439,7 @@ def get_tf_idf_feats(last_note: pd.DataFrame) -> pd.DataFrame:
     tf_idf_feats = pd.DataFrame.sparse.from_spmatrix(tf_idf, columns=select_cols, index=last_note.SUBJECT_ID)
     return tf_idf_feats
 
+
 def write_to_disk(deceased_to_date: Dict[int, dt.date], train_ids: Set[int], test_ids: Set[int], feats_to_train_on: List[pd.DataFrame], tf_idf_notes_feats: pd.DataFrame, last_note_tokenized: pd.DataFrame):
     deceased_to_date = {k: v.isoformat() for k, v in deceased_to_date.items()}
     with open(os.path.join(PATH_PROCESSED, 'etl', "deceased_to_date.json"), 'w') as f:
@@ -445,6 +457,7 @@ def write_to_disk(deceased_to_date: Dict[int, dt.date], train_ids: Set[int], tes
     tf_idf_notes_feats.to_csv(os.path.join(PATH_PROCESSED, 'tf_idf_notes_feats.csv'))
     last_note_tokenized.to_csv(os.path.join(PATH_PROCESSED, 'last_note_tokenized.csv'))
 
+
 def main():
     # Get patient sample
     patient_ids, patients_sample, deceased_to_date = get_patient_sample()
@@ -454,7 +467,6 @@ def main():
 
     date = define_train_period(deceased_to_date, *feature_sets)
 
-	#TODO from here
     # Choose last note for each patient
     last_note = get_last_note(patient_ids, notes_preprocessed, date, as_tokenized=False)
 
@@ -466,13 +478,17 @@ def main():
     ### Feature construction
     # We are going to do a train test split based on patients to validate our model. We will only use those features that appear in the train set. Also, we will only use features that are shared between many patients (we will define 'many' manually for each of the feature sets).  
     # This way we will lose some patients who don't have 'popular' features, but that's fine since our goal is to compare similar patients, not to train the best model.
-    train_ids, test_ids = train_test_split(list(patient_ids), train_size=TRAIN_SIZE, random_state=RANDOM_SEED)
-    diag, lab, med = _clean_up_feature_sets(*feature_sets, date=date)
+    ##
+    patient_ids_sp = patient_ids.to_dataframe().to_spark()
+    train_ids_sp, test_ids_sp = patient_ids_sp.randomSplit([TRAIN_SIZE, 1.0 - TRAIN_SIZE], seed=RANDOM_SEED)
+    train_ids, test_ids = train_ids_sp.to_pandas_on_spark(), test_ids_sp.to_pandas_on_spark()
 
     #### Feat calculations
-    diag_built = build_feats(diag, agg=[lambda x: x.sum() > 0], train_ids=train_ids, low_thresh=30)
-    labs_built = build_feats(lab, agg=['mean', 'max', 'min'], train_ids=train_ids, low_thresh=50)
-    meds_built = build_feats(med, agg=['mean', 'count'], train_ids=train_ids, low_thresh=50)
+    diag, lab, med = _clean_up_feature_sets(*feature_sets, date=date) # TODO need to fix
+    meds_built = build_feats(med, aggs=['mean', 'count'], train_ids=train_ids, low_thresh=50)
+    sum_greater_than_0 = F.pandas_udf(lambda x: x.sum() > 0, BooleanType())
+    diag_built = build_feats(diag, aggs=[sum_greater_than_0], train_ids=train_ids, low_thresh=30)
+    labs_built = build_feats(lab, aggs=['mean', 'max', 'min'], train_ids=train_ids, low_thresh=50)
 
     # make sparse pivoted tables
     diag_final = pivot_aggregation(diag_built, fill_value=0)
