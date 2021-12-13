@@ -1,0 +1,65 @@
+# coding: utf-8
+    sample_ids, patients_sample, deceased_to_date = get_patient_sample()
+    # get relevant MIMIC data for sample
+    diag_preprocessed, lab_preprocessed, meds_preprocessed, notes_preprocessed = preprocess(sample_ids)
+    use_feature_sets = [diag_preprocessed, lab_preprocessed, meds_preprocessed]
+feature_sets = use_feature_sets
+pred_w = PREDICTION_WINDOW
+obs_w = OBSERVATION_WINDOW
+    cols = ['SUBJECT_ID', 'DATE']
+    all_feats = pd.concat([feats[cols] for feats in feature_sets])
+    last_date_base = all_feats.groupby('SUBJECT_ID').DATE.max().to_dict()
+    last_date = {subj_id: date
+                 for subj_id, date in last_date_base.items()
+                 if subj_id not in deceased_to_date}
+    subtracted_pred_w = {subj_id: date - dt.timedelta(days=pred_w)
+                         for subj_id, date in deceased_to_date.items()}
+    last_date.update(subtracted_pred_w)
+    earliest_date = {subj_id: date - dt.timedelta(days=obs_w)
+                     for subj_id, date in last_date.items()}
+len(last_date)
+deceased_to_date
+last_date_base
+len(deceased_to_date)
+len(last_date)
+    last_date = {subj_id: date
+                 for subj_id, date in last_date_base.items()
+                 if subj_id not in deceased_to_date}
+len(last_date)
+len(last_date_base)
+len(deceased_to_date)
+earliest_date
+len(earliest_date)
+len(last_date)
+    cols = ['SUBJECT_ID', 'DATE']
+    all_feats = pd.concat([feats[cols] for feats in feature_sets])
+    last_date_base = all_feats.groupby('SUBJECT_ID').DATE.max().to_dict()
+    last_date = {subj_id: date
+                 for subj_id, date in last_date_base.items()
+                 if subj_id not in deceased_to_date}
+    subtracted_pred_w = {subj_id: date - dt.timedelta(days=pred_w)
+                         for subj_id, date in deceased_to_date.items()}
+    last_date.update(subtracted_pred_w)
+len(last_date)
+last_date
+len(last_date)
+    all_feats = pd.concat([feats[cols] for feats in feature_sets])
+    last_date_base = all_feats.groupby('SUBJECT_ID').DATE.max().to_dict()
+    last_date = {subj_id: date
+                 for subj_id, date in last_date_base.items()
+                 if subj_id not in deceased_to_date}
+len(last_date)
+len(last_date)
+len(earliest_date)
+with open('earliest_date_py.pickle', 'wb') as handle:
+    pickle.dump(earliest_date, handle)
+    
+import pickle
+with open('earliest_date_py.pickle', 'wb') as handle:
+    pickle.dump(earliest_date, handle)
+    
+with open('last_date_py.pickle', 'wb') as handle:
+    pickle.dump(last_date, handle)
+    
+    
+%save -r py-preprocessing-sesh 1-999999

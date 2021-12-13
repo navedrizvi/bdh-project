@@ -1,0 +1,26 @@
+# coding: utf-8
+    patient_ids, patients_sample, deceased_to_date = get_patient_sample()
+    # get relevant MIMIC data for sample
+    diag_preprocessed, lab_preprocessed, meds_preprocessed, notes_preprocessed = preprocess(patient_ids)
+    feature_sets = [diag_preprocessed, lab_preprocessed, meds_preprocessed]
+
+    earliest_date, last_date = define_train_period(deceased_to_date, *feature_sets)
+type(last_date)
+type(earliest_date)
+a = last_date.to_dict()
+a
+import pickle
+with open('earliest_date_spark.pickle', 'wb') as handle:
+    pickle.dump(a, handle, protocol=pickle.HIGEST_PROTOCOL)
+    
+with open('earliest_date_spark.pickle', 'wb') as handle:
+    pickle.dump(a, handle)
+    
+    
+b = last_date.to_dict()
+with open('last_date_spark.pickle', 'wb') as handle:
+    pickle.dump(b, handle)
+    
+    
+    
+%save -r spark-preprocessing-sesh 1-999999
