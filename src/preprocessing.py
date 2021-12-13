@@ -443,4 +443,7 @@ def main():
 
     # Feeds diag_built, labs_built, meds_built, last_note to preprocessing.py
     # deceased_to_date, train_ids, test_ids, last_note_tokenized are for testing
-    return deceased_to_date, train_ids, test_ids, last_note_tokenized, diag_built, labs_built, meds_built, last_note
+    # return deceased_to_date, train_ids, test_ids, last_note_tokenized, diag_built, labs_built, meds_built, last_note
+
+if __name__ == '__main__':
+    main()

@@ -1,5 +1,5 @@
 '''
-Downstream of preprocessing.py (run on local machine)
+Downstream of preprocessing.py (runs on single machine)
 '''
 import os
 from typing import List, Tuple
@@ -73,4 +73,7 @@ def main():
 
     feats_to_train_on = [diag_final, meds_final, labs_final]
     _write_local_dfs_to_disk(feats_to_train_on=feats_to_train_on, tf_idf_notes_feats=tf_idf_notes_feats)
-    return diag_final, meds_final, labs_final, 
+    # return diag_final, meds_final, labs_final, 
+
+if __name__ == '__main__':
+    main()
