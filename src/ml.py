@@ -19,17 +19,6 @@ MODELS_BASE_PATH = '../data/models/'
 EMBEDDING_TEMPLATE = '../data/embeddings/{subj_id}.pt'
 
 PRETRAINED_MODEL_NAME = 'deepset/covid_bert_base'
-BLUEBERT_LAST_NOTE_EMBEDS = "../data/embeds_bluebert/"
-tokenizer = AutoTokenizer.from_pretrained("bionlp/bluebert_pubmed_uncased_L-24_H-1024_A-16")
-config = AutoConfig.from_pretrained("bionlp/bluebert_pubmed_uncased_L-24_H-1024_A-16", output_hidden_states=True, output_attentions=True)
-model = AutoModelForMaskedLM.from_pretrained("bionlp/bluebert_pubmed_uncased_L-24_H-1024_A-16", config=config)
-calculate_and_store_embeds(BLUEBERT_LAST_NOTE_EMBEDS,
-                           tokenizer, model,
-                           last_note,
-                           text_col='TO_TOK',
-                           max_length=512)
-embed_df_blue = get_embeds_df(BLUEBERT_LAST_NOTE_EMBEDS)
-
 
 RANDOM_SEED = 1
 

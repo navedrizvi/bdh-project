@@ -133,6 +133,7 @@ all_notes_cols = [
 
 
 def get_patient_sample() -> Tuple[ps.series.Series[int], ps.frame.DataFrame, ps.frame.DataFrame]:
+    ''' Extracts the patient_ids, patient records and deceased_patients from the PATIENTS table '''
     patients = ps.read_csv(PATIENTS_PATH)
     sample_ids = patients.SUBJECT_ID
     # Moratality set
@@ -147,7 +148,7 @@ def get_patient_sample() -> Tuple[ps.series.Series[int], ps.frame.DataFrame, ps.
 
 
 def _get_data_for_sample(patient_ids: ps.series.Series[int], file_name: str, skip_sampling: bool = True) -> ps.frame.DataFrame:
-    '''Get the data only relevant for the sample.'''
+    ''' Get the data only relevant for the sample. '''
     full_path = RAW_BASE_PATH.format(fname=file_name)
     raw = ps.read_csv(full_path)
 
@@ -294,6 +295,10 @@ def _clean_up_feature_sets(*feature_sets: List[ps.frame.DataFrame], date: ps.fra
 
 
 def get_last_note(patient_ids: ps.series.Series[int], notes_preprocessed: ps.frame.DataFrame, date: ps.frame.DataFrame, as_tokenized=False) -> ps.frame.DataFrame:
+    '''
+    Returns dataframe containing latest note for each patient. If @as_tokenized is true, performs extra cleansing in to prepare the text blob for tokenizer,
+    otherwise, returns the latest note without cleansing
+    '''
     if as_tokenized:
         last_note = _clean_up_feature_sets(notes_preprocessed, date=date, is_notes=True)[0]
         select_cols = ['SUBJECT_ID', 'DATE', 'TEXT']
@@ -377,6 +382,9 @@ def build_feats(df: ps.frame.DataFrame, aggs: list, train_ids: ps.frame.DataFram
 
 
 def _write_spark_dfs_to_disk(deceased_to_date: ps.frame.DataFrame, train_ids: ps.frame.DataFrame, test_ids: ps.frame.DataFrame, last_note_tokenized: ps.frame.DataFrame, diag_built: ps.frame.DataFrame, labs_built: ps.frame.DataFrame, meds_built: ps.frame.DataFrame, last_note: ps.frame.DataFrame):
+    '''
+    Writes all input dataframes to disk
+    '''
     deceased_to_date_sp = deceased_to_date.to_spark()
     train_ids_sp = train_ids.to_spark()
     test_ids_sp = test_ids.to_spark()
@@ -408,6 +416,9 @@ def _write_spark_dfs_to_disk(deceased_to_date: ps.frame.DataFrame, train_ids: ps
 
 
 def main():
+    '''
+    Main preprocessing logic
+    '''
     # Get patient sample
     patient_ids, patients_sample, deceased_to_date = get_patient_sample()
     # get relevant MIMIC data for sample
@@ -441,9 +452,6 @@ def main():
 
     _write_spark_dfs_to_disk(deceased_to_date, train_ids, test_ids, last_note_tokenized, diag_built, labs_built, meds_built, last_note)
 
-    # Feeds diag_built, labs_built, meds_built, last_note to preprocessing.py
-    # deceased_to_date, train_ids, test_ids, last_note_tokenized are for testing
-    # return deceased_to_date, train_ids, test_ids, last_note_tokenized, diag_built, labs_built, meds_built, last_note
 
 if __name__ == '__main__':
     main()
