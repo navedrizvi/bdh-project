@@ -23,7 +23,7 @@ DIAG_PATH = RAW_BASE_PATH.format(fname=DIAGNOSES_FNAME)
 PATIENTS_PATH = RAW_BASE_PATH.format(fname=PATIENTS_FNAME)
 
 
-def pivot_aggregation(df_local: pd.DataFrame, fill_value: int = 0, use_sparse: bool = True) -> pd.DataFrame:
+def pivot_aggregation(df_local: pd.DataFrame, fill_value: int = None, use_sparse: bool = True) -> pd.DataFrame:
     '''Make sparse pivoted table with SUBJECT_ID as index.'''
     pivoted_local = df_local.unstack()
     if fill_value is not None:
@@ -46,10 +46,14 @@ def get_tf_idf_feats(last_note: pd.DataFrame) -> pd.DataFrame:
 
 def _read_spark_dfs_from_disk() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     diag_built = ps.read_csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'diag_built.csv')).to_pandas()
-    meds_built = pd.read_csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'meds_built.csv')).to_pandas()
-    labs_built = pd.read_csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'labs_built.csv')).to_pandas()
+    print('done reading diag_built')
+    meds_built = ps.read_csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'meds_built.csv')).to_pandas()
+    print('done reading meds_built')
+    labs_built = ps.read_csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'labs_built.csv')).to_pandas()
+    print('done reading labs_built')
     last_note = pd.read_csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'last_note.csv')).to_pandas()
-    return diag_built, labs_built, meds_built, last_note
+    print('done reading last_note')
+    return diag_built, meds_built, labs_built, last_note
 
 
 def _write_local_dfs_to_disk(feats_to_train_on: List[pd.DataFrame], tf_idf_notes_feats: pd.DataFrame):

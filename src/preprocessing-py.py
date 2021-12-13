@@ -196,7 +196,7 @@ def _prepare_text_for_tokenizer(text: str) -> str:
     # replace punctuation
     removed_symbols = re.sub('[\[\]\*\_#:?!]+', ' ', cleaned)
 
-    # remove spaves
+    # remove spaces
     removed_spaces = re.sub(' +', ' ', removed_symbols)
 
     # remove dots
