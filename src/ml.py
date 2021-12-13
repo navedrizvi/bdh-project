@@ -9,6 +9,7 @@ import pandas as pd
 import torch
 from sklearn.metrics import roc_auc_score
 from sklearn.ensemble import RandomForestClassifier
+import pyspark.pandas as ps
 from joblib import dump
 
 from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoConfig
@@ -21,7 +22,7 @@ EMBEDDING_TEMPLATE = '../data/embeddings/{subj_id}.pt'
 PRETRAINED_MODEL_NAME = 'deepset/covid_bert_base'
 
 RANDOM_SEED = 1
-
+PATH_PROCESSED = '../data/processed/'
 
 class ModelType(enum.Enum):
     Baseline = 'Baseline'
@@ -29,8 +30,8 @@ class ModelType(enum.Enum):
     Embeddings = 'Embeddings'
 
 
-# common ML
 def get_training_and_target(model_type: ModelType, deceased_to_date: pd.Series, *feats_to_train_on: List[pd.DataFrame], improved_df = None) -> Tuple[pd.DataFrame, pd.Series]:
+    ''' Returns training and target dfs '''
     feats_to_train_on_1 = [*feats_to_train_on]
     df_final = pd.concat(feats_to_train_on_1, axis=1).fillna(0)
     if model_type == ModelType.Baseline:
@@ -55,6 +56,7 @@ def _train_and_predict(df: pd.DataFrame, target: pd.Series, train_loc: pd.Series
 
 
 def train_cl_model(model_type: ModelType, df: pd.DataFrame, train_ids: Set[int], target: pd.Series) -> None:
+    ''' Trains random classifier model '''
     train_loc = df.index.isin(train_ids)
     cl = RandomForestClassifier(random_state=RANDOM_SEED)
     pred = _train_and_predict(df, target, train_loc, cl)
@@ -66,8 +68,8 @@ def train_cl_model(model_type: ModelType, df: pd.DataFrame, train_ids: Set[int],
 
 # embedding ML
 # TODO refactor this to work on batches of notes
+    # '''This is slow.'''
 def _get_vector_for_text(text: str, tokenizer: AutoTokenizer, model: AutoModelForMaskedLM) -> torch.Tensor:
-    '''This is ugly and slow.'''
     encoding = tokenizer(text, 
                         add_special_tokens=True,
                         truncation=True, 
@@ -107,6 +109,7 @@ def _get_saved_embeddings() -> Tuple[List[int], List[np.array]]:
 
 
 def generate_and_get_embeddings_df(last_note_tokenized: pd.Series) -> pd.DataFrame:
+    ''' Returns dataframe containing embeddings for pretrained model '''
     config = AutoConfig.from_pretrained(PRETRAINED_MODEL_NAME, output_hidden_states=True, output_attentions=True)
     model = AutoModelForMaskedLM.from_pretrained(PRETRAINED_MODEL_NAME, config=config)
     tokenizer = AutoTokenizer.from_pretrained(PRETRAINED_MODEL_NAME)
@@ -117,14 +120,31 @@ def generate_and_get_embeddings_df(last_note_tokenized: pd.Series) -> pd.DataFra
     embed_df.columns = [f'EMBED_{i}' for i in embed_df.columns]
     return embed_df
 
-# def get_input():
 
-    # deceased_to_date, train_ids, feats_to_train_on, tf_idf_notes_feats, last_note_tokenized
+def _read_spark_dfs_from_disk() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    '''
+    Reads output of preprocessing.py and preprocessing2.py
+    '''
+    deceased_to_date = ps.read_csv(os.path.join(PATH_PROCESSED, 'spark-etl', 'deceased_to_date.json')).to_pandas()
+    train_ids = ps.read_csv(os.path.join(PATH_PROCESSED, 'spark-etl', 'train_ids.json')).to_pandas()
 
-def main(deceased_to_date: pd.Series, train_ids: Set[int], feats_to_train_on: List[pd.DataFrame], tf_idf_notes_feats: pd.DataFrame, last_note_tokenized: pd.Series):
+    tf_idf_notes_feats = ps.read_csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'tf_idf_notes_feats.csv')).to_pandas()
+    feats_to_train_on = []
+    for i in range(3):
+        feats_to_train_on.append(ps.read_csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', f'training_feat{i}.csv')))
+    
+    last_note_tokenized = ps.read_csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', f'last_note_tokenized.csv'))
+    
+    return deceased_to_date, train_ids, feats_to_train_on, tf_idf_notes_feats, last_note_tokenized
+
+
+def main():
     '''
-    params: deceased_to_date, train_ids, feats_to_train_on, tf_idf_notes_feats, last_note_tokenized = preprocessing.main()
+
     '''
+    # get input
+    deceased_to_date, train_ids, feats_to_train_on, tf_idf_notes_feats, last_note_tokenized = _read_spark_dfs_from_disk()
+    
     ### Train Baseline model
     # We will use random forest to automatically incorporate feature interrelations into our model.
     df_final_baseline, target_baseline = get_training_and_target(ModelType.Baseline, deceased_to_date, *feats_to_train_on)
