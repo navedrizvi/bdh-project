@@ -10,8 +10,8 @@ import pyspark.sql.functions as F
 import os
 
 # Set environment variables (both should point to same pythonpath)
-os.environ['PYSPARK_PYTHON'] = '~/miniconda3/envs/hc_nlp_2/bin/python'
-os.environ['PYSPARK_DRIVER_PYTHON'] = '~/miniconda3/envs/hc_nlp_2/bin/python'
+# os.environ['PYSPARK_PYTHON'] = '~/miniconda3/envs/nlp/bin/python'
+# os.environ['PYSPARK_DRIVER_PYTHON'] = '~/miniconda3/envs/nlp/bin/python'
 
 # Input files
 RAW_BASE_PATH = '../data/raw/{fname}'
