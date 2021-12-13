@@ -256,7 +256,7 @@ def define_train_period(deceased_to_date: ps.frame.DataFrame, *feature_sets: Lis
                         pred_w: int = PREDICTION_WINDOW) -> ps.frame.DataFrame:
 	''' 
     Create SUBJECT_ID -> earliest_date and SUBJECT_ID -> last date dfs.
-    Returns DF (SUBJECT_ID, EARLIEST_DATE, LAST_DATE_OR_DOD)
+    Returns DF (SUBJECT_ID, EARLIEST_DATE, LAST_DATE_OR_(DOD_MINUS_PREDW))
     '''
 	cols = ['SUBJECT_ID', 'DATE']
 	# union of feature sets on 'SUBJECT_ID' and 'DATE'
@@ -277,7 +277,8 @@ def define_train_period(deceased_to_date: ps.frame.DataFrame, *feature_sets: Lis
 
 
 def _clean_up_feature_sets(*feature_sets: List[ps.frame.DataFrame], date: ps.frame.DataFrame, is_notes: bool = False) -> List[ps.frame.DataFrame]:
-    '''Leave only features from inside the observation window.
+    '''
+    Leave only features from inside the observation window.
     Returned DF schema: (SUBJECT_ID, DATE, FEATURE_NAME, VALUE)
     if is_notes: (SUBJECT_ID, DATE, existing ntoes feats.....)
     '''
@@ -335,7 +336,8 @@ def get_last_note(patient_ids: ps.series.Series[int], notes_preprocessed: ps.fra
 
 
 def build_feats(df: ps.frame.DataFrame, aggs: list, train_ids: ps.frame.DataFrame = None, low_thresh: int = None, is_diag: bool = False) -> ps.frame.DataFrame:
-    '''Build feature aggregations for patient.
+    '''
+    Build feature aggregations for patient.
 
     Args:
         agg: list of aggregations to use
@@ -383,7 +385,7 @@ def build_feats(df: ps.frame.DataFrame, aggs: list, train_ids: ps.frame.DataFram
 
 def _write_spark_dfs_to_disk(deceased_to_date: ps.frame.DataFrame, train_ids: ps.frame.DataFrame, test_ids: ps.frame.DataFrame, last_note_tokenized: ps.frame.DataFrame, diag_built: ps.frame.DataFrame, labs_built: ps.frame.DataFrame, meds_built: ps.frame.DataFrame, last_note: ps.frame.DataFrame):
     '''
-    Writes all input dataframes to disk
+    Writes all input dataframes to disk. Output is a dictory containting file paritions.
     '''
     deceased_to_date_sp = deceased_to_date.to_spark()
     train_ids_sp = train_ids.to_spark()
