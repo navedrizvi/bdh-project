@@ -62,7 +62,6 @@ relevant_diag_codes: List[int] = [*acute_diag_codes, *other_resp_tract_diag_code
 RELEVANT_DIAG_CODES = [str(e) for e in relevant_diag_codes]
 
 
-# TODO
 def get_patient_sample() -> Tuple[set, pd.Series, Dict[int, dt.date]]:
     patients = pd.read_csv(PATIENTS_PATH)
     #sampling random patients

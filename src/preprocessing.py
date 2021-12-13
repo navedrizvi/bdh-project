@@ -367,7 +367,7 @@ def build_feats(df: ps.frame.DataFrame, aggs: list, train_ids: ps.frame.DataFram
 
     # drop extraneous col
     df = df.drop('DATE')
-    if is_diag == True: # TODO fix VALUE should be True or false
+    if is_diag == True:
         # Diag requires custom pyspark aggregation
         df_sp = df.to_spark()
         grouped_sp = df_sp.groupBy(*cols_to_use).agg(
