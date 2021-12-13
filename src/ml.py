@@ -117,6 +117,8 @@ def generate_and_get_embeddings_df(last_note_tokenized: pd.Series) -> pd.DataFra
     embed_df.columns = [f'EMBED_{i}' for i in embed_df.columns]
     return embed_df
 
+# def get_input():
+    # deceased_to_date, train_ids, feats_to_train_on, tf_idf_notes_feats, last_note_tokenized
 
 def main(deceased_to_date: pd.Series, train_ids: Set[int], feats_to_train_on: List[pd.DataFrame], tf_idf_notes_feats: pd.DataFrame, last_note_tokenized: pd.Series):
     '''
