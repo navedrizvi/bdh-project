@@ -131,16 +131,16 @@ def _read_spark_dfs_from_disk() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFram
     tf_idf_notes_feats = ps.read_csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'tf_idf_notes_feats.csv')).to_pandas()
     feats_to_train_on = []
     for i in range(3):
-        feats_to_train_on.append(ps.read_csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', f'training_feat{i}.csv')))
+        feats_to_train_on.append(ps.read_csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', f'training_feat{i}.csv')).to_pandas())
     
-    last_note_tokenized = ps.read_csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', f'last_note_tokenized.csv'))
+    last_note_tokenized = ps.read_csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', f'last_note_tokenized.csv')).to_pandas()
     
     return deceased_to_date, train_ids, feats_to_train_on, tf_idf_notes_feats, last_note_tokenized
 
 
 def main():
     '''
-
+    Bare-bones logic for training and evaluating the ML models
     '''
     # get input
     deceased_to_date, train_ids, feats_to_train_on, tf_idf_notes_feats, last_note_tokenized = _read_spark_dfs_from_disk()
