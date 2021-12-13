@@ -2,18 +2,26 @@
 Derived from preprocessing-py.py to run in Spark for parallelism
 '''
 import os
-from typing import List, Tuple
+from typing import Dict, List, NamedTuple, Set, Tuple, Union
+import re
+import json
+import datetime as dt
+from collections import Counter
+
+import pandas as pd
+# from sklearn.model_selection import train_test_split
+# from sklearn.feature_extraction.text import TfidfVectorizer
+import os
+
+# Set environment variables
+os.environ['PYSPARK_PYTHON'] = '~/miniconda3/envs/hc_nlp_2/bin/python'
+os.environ['PYSPARK_DRIVER_PYTHON'] = '~/miniconda3/envs/hc_nlp_2/bin/python'
 
 import pyspark.pandas as ps
 import pyspark.sql.types as T
 import pyspark.sql.functions as F
 import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
-import os
 
-# Set environment variables (both should point to same pythonpath)
-os.environ['PYSPARK_PYTHON'] = '~/miniconda3/envs/hc_nlp_2/bin/python'
-os.environ['PYSPARK_DRIVER_PYTHON'] = '~/miniconda3/envs/hc_nlp_2/bin/python'
 
 # Input files
 RAW_BASE_PATH = '../data/raw/{fname}'
@@ -23,6 +31,7 @@ LABEVENTS_FNAME = 'LABEVENTS.csv.gz'
 PRESCRIPTIONS_FNAME = 'PRESCRIPTIONS.csv.gz'
 PATIENTS_FNAME = 'PATIENTS.csv.gz'
 NOTES_FNAME = 'NOTEEVENTS.csv.gz'
+
 
 PATH_PROCESSED = '../data/processed/'
 
@@ -63,7 +72,38 @@ grp6 = [
 relevant_diag_codes: List[int] = [*acute_diag_codes, *other_resp_tract_diag_codes, *pneumonia_and_influenza_diag_codes, *grp4, *grp5, *grp6]
 RELEVANT_DIAG_CODES = [str(e) for e in relevant_diag_codes]
 
-# Feature tables column names
+
+
+def get_patient_sample() -> Tuple[ps.series.Series[int], ps.frame.DataFrame, ps.frame.DataFrame]:
+    patients = ps.read_csv(PATIENTS_PATH)
+    sample_ids = patients.SUBJECT_ID
+    # Moratality set
+    deceased_patients = patients[patients.EXPIRE_FLAG == 1] 
+    deceased_patients = deceased_patients[['SUBJECT_ID', 'DOD']]
+    # first 10 characters of DOD column is date (we're ignoring time)
+    deceased_patients = deceased_patients.to_spark()
+    deceased_patients = deceased_patients.select('SUBJECT_ID', F.substring('DOD', 0, 10).alias('DOD'))
+    deceased_patients = deceased_patients.to_pandas_on_spark()
+
+    return sample_ids, patients, deceased_patients
+
+
+def _get_data_for_sample(patient_ids: ps.series.Series[int], file_name: str, skip_sampling: bool = True) -> ps.frame.DataFrame:
+    '''Get the data only relevant for the sample.'''
+    full_path = RAW_BASE_PATH.format(fname=file_name)
+    raw = ps.read_csv(full_path)
+    # Drop rows that do not include an approved `result_name` from the Inclusion List
+
+    relevant_data = raw.to_spark()
+    if skip_sampling == False:
+        patient_ids = patient_ids.to_dataframe().to_spark()
+        relevant_data = raw.join(F.broadcast(patient_ids), raw.SUBJECT_ID == patient_ids.SUBJECT_ID, 'left_semi')
+    relevant_data = relevant_data.to_pandas_on_spark()
+
+    return relevant_data
+
+
+# ROW_ID: int, SUBJECT_ID: int, HADM_ID: int, ADMITTIME: string, DISCHTIME: string, DEATHTIME: string, ADMISSION_TYPE: string, ADMISSION_LOCATION: string, DISCHARGE_LOCATION: string, INSURANCE: string, LANGUAGE: string, RELIGION: string, MARITAL_STATUS: string, ETHNICITY: string, EDREGTIME: string, EDOUTTIME: string, DIAGNOSIS: string, HOSPITAL_EXPIRE_FLAG: int, HAS_CHARTEVENTS_DATA: int, ADMITTIME: string
 all_admissions_cols = [
 	'ROW_ID',
 	'SUBJECT_ID',
@@ -118,7 +158,6 @@ all_meds_cols = [
 	'FORM_UNIT_DISP',
 	'ROUTE'
 ]
-
 all_notes_cols = [
 	'ROW_ID',
 	'SUBJECT_ID',
@@ -132,36 +171,6 @@ all_notes_cols = [
 	'ISERROR',
 	'TEXT'
 ]
-
-
-def get_patient_sample() -> Tuple[ps.series.Series[int], ps.frame.DataFrame, ps.frame.DataFrame]:
-    patients = ps.read_csv(PATIENTS_PATH)
-    sample_ids = patients.SUBJECT_ID
-    # Moratality set
-    deceased_patients = patients[patients.EXPIRE_FLAG == 1] 
-    deceased_patients = deceased_patients[['SUBJECT_ID', 'DOD']]
-    # first 10 characters of DOD column is date (we're ignoring time)
-    deceased_patients = deceased_patients.to_spark()
-    deceased_patients = deceased_patients.select('SUBJECT_ID', F.substring('DOD', 0, 10).alias('DOD'))
-    deceased_patients = deceased_patients.to_pandas_on_spark()
-
-    return sample_ids, patients, deceased_patients
-
-
-def _get_data_for_sample(patient_ids: ps.series.Series[int], file_name: str, skip_sampling: bool = True) -> ps.frame.DataFrame:
-    '''Get the data only relevant for the sample.'''
-    full_path = RAW_BASE_PATH.format(fname=file_name)
-    raw = ps.read_csv(full_path)
-    # Drop rows that do not include an approved `result_name` from the Inclusion List
-
-    relevant_data = raw.to_spark()
-    if skip_sampling == False:
-        patient_ids = patient_ids.to_dataframe().to_spark()
-        relevant_data = raw.join(F.broadcast(patient_ids), raw.SUBJECT_ID == patient_ids.SUBJECT_ID, 'left_semi')
-    relevant_data = relevant_data.to_pandas_on_spark()
-
-    return relevant_data
-
 
 def preprocess(patient_ids: ps.series.Series[int]) -> Tuple[ps.frame.DataFrame, ps.frame.DataFrame, ps.frame.DataFrame, ps.frame.DataFrame]:
     ''' Returns preprocessed dfs containg records for @patient_ids
@@ -205,6 +214,7 @@ def preprocess(patient_ids: ps.series.Series[int]) -> Tuple[ps.frame.DataFrame, 
     meds = meds[meds.ENDDATE.notna()]
     meds['DOSE_VAL_RX'] = meds['DOSE_VAL_RX'].fillna(0)
 
+
     meds_sp = meds.to_spark()
 
     # renames ENDDATE to DATE
@@ -218,6 +228,7 @@ def preprocess(patient_ids: ps.series.Series[int]) -> Tuple[ps.frame.DataFrame, 
     meds_sp = meds_sp.select(*all_cols3_2 + ['STARTDATE'], F.split(F.col('DOSE_VAL_RX'), '-').alias('dose_arr_temp'))
     meds_sp = meds_sp.withColumn('dose_arr_temp', F.col('dose_arr_temp').cast('array<float>'))
 
+    #TODO Need to handle: ['50/500', '250/50', '500//50', '800/160', '-0.5-2', '0.3%', 'About-CM1000', 'one', '500/50', '12-', '-15-30', '1%', 'Hold Dose', '1.25/3', '1%', ': 5-10', '0.63/3', '0.63/3', '20-', '1.26mg/6', '1.26mg/6', '0.63 mg/3', '1.2/1']
     query = '''aggregate(
         `{col}`,
         CAST(0.0 AS double),
@@ -233,6 +244,7 @@ def preprocess(patient_ids: ps.series.Series[int]) -> Tuple[ps.frame.DataFrame, 
     meds_preprocessed = meds.drop(columns=dropper).rename(columns=renamer)
     print('done processing meds')
 
+    # Here we can preprocess notes. Later the same things can be done using Spark # TODO 2
     #### Notes
     notes_preprocessed = _get_data_for_sample(patient_ids, NOTES_FNAME, skip_sampling=True)
 
@@ -243,6 +255,7 @@ def preprocess(patient_ids: ps.series.Series[int]) -> Tuple[ps.frame.DataFrame, 
     notes_preprocessed_sp = notes_preprocessed_sp.withColumn('CLEAN_TEXT', F.regexp_replace(F.col('TEXT'), '[^\w]', ' '))
     notes_preprocessed_sp = notes_preprocessed_sp.withColumn('CLEAN_TEXT', F.regexp_replace(F.col('CLEAN_TEXT'), '_', ' '))
     notes_preprocessed_sp = notes_preprocessed_sp.withColumn('CLEAN_TEXT', F.regexp_replace(F.col('CLEAN_TEXT'), ' +', ' '))
+    # all_cols4_2 = [col for col in all_notes_cols if col != 'TEXT']
     notes_preprocessed_sp = notes_preprocessed_sp.select(*all_notes_cols, F.lower(F.col('CLEAN_TEXT')).alias('CLEAN_TEXT'))
     # rename to DATE for consistency
     notes_preprocessed_sp = notes_preprocessed_sp.withColumnRenamed('CHARTDATE', 'DATE')
@@ -250,7 +263,14 @@ def preprocess(patient_ids: ps.series.Series[int]) -> Tuple[ps.frame.DataFrame, 
     print('done processing notes')
 
     return diag_preprocessed, lab_preprocessed, meds_preprocessed, notes_preprocessed
+##########################
 
+####### QA
+#ensuring every patient is unique
+# print(f'{patients.SUBJECT_ID.nunique()} unique patients in {len(patients)} rows')
+# TODO (add more form nb) calculate summary stats for data to ensure quality (asserts, can be approx)
+# print(f'{patients.SUBJECT_ID.nunique()} unique patients in {len(patients)} rows')
+###########
 
 ## Feature engr. helpers
 def define_train_period(deceased_to_date: ps.frame.DataFrame, *feature_sets: List[ps.frame.DataFrame],
@@ -277,6 +297,18 @@ def define_train_period(deceased_to_date: ps.frame.DataFrame, *feature_sets: Lis
 	data = data_sp.to_pandas_on_spark()
 	return data
 
+### MARK: dead code
+# 	last_date_sp_j = last_date_sp.join(F.broadcast(subtracted_pred_w_sp), last_date_sp.SUBJECT_ID == subtracted_pred_w_sp.SUBJECT_ID, 'left_anti')
+# 	last_date_sp_j = last_date_sp_j.drop(last_date_sp.SUBJECT_ID)
+# 	last_date = last_date_sp_j.to_pandas_on_spark()
+# 	subtracted_pred_w = subtracted_pred_w_sp.to_pandas_on_spark()
+# 	last_date.update(subtracted_pred_w)
+
+# 	earliest_date_sp = last_date_sp.select('SUBJECT_ID', F.date_sub(F.col('DATE'), obs_w).alias('DATE'))
+# 	earliest_date = earliest_date_sp.to_pandas_on_spark()
+	# return (earliest_date, last_date)
+###
+
 
 def _clean_up_feature_sets(*feature_sets: List[ps.frame.DataFrame], date: ps.frame.DataFrame, is_notes: bool = False) -> List[ps.frame.DataFrame]:
     '''Leave only features from inside the observation window.
@@ -296,15 +328,18 @@ def _clean_up_feature_sets(*feature_sets: List[ps.frame.DataFrame], date: ps.fra
     return results
 
 
-def get_last_note(patient_ids: ps.series.Series[int], notes_preprocessed: ps.frame.DataFrame, date: ps.frame.DataFrame, as_tokenized=False) -> ps.frame.DataFrame:
+def get_last_note(patient_ids: ps.series.Series[int], notes_preprocessed: ps.frame.DataFrame, date: ps.frame.DataFrame, as_tokenized=False) -> ps.series.Series[int]:
     if as_tokenized:
         last_note = _clean_up_feature_sets(notes_preprocessed, date=date, is_notes=True)[0]
         select_cols = ['SUBJECT_ID', 'DATE', 'TEXT']
         last_note = last_note.sort_values(by=select_cols, ascending=False).drop_duplicates('SUBJECT_ID')[select_cols]
+
         ###
+        # last_note = last_note[last_note.SUBJECT_ID.isin(patient_ids)]
         last_note_sp = last_note.to_spark()
         patient_ids_sp = patient_ids.to_dataframe().to_spark()
         last_note_sp = last_note_sp.join(F.broadcast(patient_ids_sp), last_note_sp.SUBJECT_ID == patient_ids_sp.SUBJECT_ID, 'left_semi') 
+        ##
 
         ## Prepare text for tokenizer
         last_note_sp = last_note.to_spark()
@@ -324,6 +359,7 @@ def get_last_note(patient_ids: ps.series.Series[int], notes_preprocessed: ps.fra
         select_cols = ['SUBJECT_ID', 'DATE', 'CLEAN_TEXT']
         last_note = last_note.sort_values(by=select_cols, ascending=False).drop_duplicates('SUBJECT_ID')[select_cols]
         ##
+        # last_note = last_note[last_note.SUBJECT_ID.isin(patient_ids)]
         last_note_sp = last_note.to_spark()
         patient_ids_sp = patient_ids.to_dataframe().to_spark()
         last_note_sp = last_note_sp.join(F.broadcast(patient_ids_sp), last_note_sp.SUBJECT_ID == patient_ids_sp.SUBJECT_ID, 'left_semi') 
@@ -341,31 +377,39 @@ def build_feats(df: ps.frame.DataFrame, aggs: list, train_ids: ps.frame.DataFram
             will be used
         low_thresh: if not empty, only features that more than low_thresh
             patients have will be used
-        
-        Returns schema: SUBJECT_ID FEATURE_NAME  ...agg_cols...
     '''
     cols_to_use = ['SUBJECT_ID', 'FEATURE_NAME']
+    # print(f'Total feats: {df.FEATURE_NAME.nunique()}')
     df_sp = df.to_spark()
     if train_ids is not None:
+        # train_df = df[df.SUBJECT_ID.isin(train_ids)]
         train_ids_sp = train_ids.to_spark()
         train_df_sp = df_sp.join(F.broadcast(train_ids_sp), df_sp.SUBJECT_ID == train_ids_sp.SUBJECT_ID, 'left_semi')
+
+        ##
+        # df = df[df.FEATURE_NAME.isin(train_feats)]
         df_sp = df_sp.join(F.broadcast(train_df_sp), df_sp.FEATURE_NAME == train_df_sp.FEATURE_NAME, 'left_semi')
         df = df_sp.to_pandas_on_spark()
+        ##
 
     if low_thresh is not None:
         deduplicated = df.drop_duplicates(cols_to_use)
+        ##
         # Count freq. of FEATURE_NAME (categorical variable)
+        # count: Dict[str, int] = Counter(deduplicated.FEATURE_NAME) #py
+        # features_to_leave = set(feat for feat, cnt in count.items() if cnt > low_thresh) #py
         count = deduplicated.FEATURE_NAME.value_counts()
         count = count.to_frame().reset_index()
         count = count.rename(columns={'FEATURE_NAME': 'COUNT_TMP', 'index': 'FEATURE_NAME'})
         features_to_leave = count[count['COUNT_TMP'] > low_thresh]
+        # print(f'Feats after removing rare: {len(features_to_leave)}')
+        ##
+        # df = df[df.FEATURE_NAME.isin(features_to_leave)]
         features_to_leave_sp = features_to_leave.to_spark().drop('COUNT_TMP')
         df_sp = df_sp.join(F.broadcast(features_to_leave_sp), df_sp.FEATURE_NAME == features_to_leave_sp.FEATURE_NAME, 'left_semi')
         df = df_sp.to_pandas_on_spark()
 
-    # drop extraneous col
-    df = df.drop('DATE')
-    if is_diag == True: # TODO fix VALUE should be True or false
+    if is_diag == True:
         # Diag requires custom pyspark aggregation
         df_sp = df.to_spark()
         grouped_sp = df_sp.groupBy(*cols_to_use).agg(
@@ -379,48 +423,46 @@ def build_feats(df: ps.frame.DataFrame, aggs: list, train_ids: ps.frame.DataFram
     return grouped
 
 
-def pivot_aggregation(df_local: pd.DataFrame, fill_value: int = 0, use_sparse: bool = True) -> pd.DataFrame:
+def pivot_aggregation(df: ps.frame.DataFrame, fill_value: int = 0, use_sparse: bool = True) -> ps.frame.DataFrame:
     '''Make sparse pivoted table with SUBJECT_ID as index.'''
-    pivoted_local = df_local.unstack()
+    pivoted = df.unstack()
     if fill_value is not None:
-        pivoted_local = pivoted_local.fillna(fill_value)
+        pivoted = pivoted.fillna(fill_value)
     
     if use_sparse:
-        pivoted_local = pivoted_local.astype(pd.SparseDtype('float', fill_value))
+        pivoted = pivoted.astype(pd.SparseDtype('float', fill_value))
     
-    pivoted_local.columns = [f'{col[-1]}_{col[1]}' for col in pivoted_local.columns]
-    return pivoted_local
+    pivoted.columns = [f'{col[-1]}_{col[1]}' for col in pivoted.columns]
+    return pivoted
 
 
-def _write_spark_dfs_to_disk(deceased_to_date: ps.frame.DataFrame, train_ids: ps.frame.DataFrame, test_ids: ps.frame.DataFrame, last_note_tokenized: ps.frame.DataFrame, diag_built: ps.frame.DataFrame, labs_built: ps.frame.DataFrame, meds_built: ps.frame.DataFrame, last_note: ps.frame.DataFrame):
-    deceased_to_date_sp = deceased_to_date.to_spark()
-    train_ids_sp = train_ids.to_spark()
-    test_ids_sp = test_ids.to_spark()
-    diag_built_sp = diag_built.to_spark()
-    meds_build_sp = meds_built.to_spark()
-    labs_built_sp = labs_built.to_spark()
-    last_note_sp = last_note.to_spark()
-    last_note_tokenized_sp = last_note_tokenized.to_spark()
+# TODO 4 cleanup for TF-IDF lemmatise, remove stopwords
+# TODO 4 need to do in spark somehow
+def get_tf_idf_feats(last_note: pd.DataFrame) -> pd.DataFrame:
+    vectorizer = TfidfVectorizer(max_features=200)
+    tf_idf = vectorizer.fit_transform(last_note.CLEAN_TEXT)
+    select_cols = [f'TFIDF_{feat}' for feat in vectorizer.get_feature_names()]
 
-    deceased_to_date_sp.write.mode('overwrite').json(os.path.join(PATH_PROCESSED, 'spark-etl', 'deceased_to_date.json'))
-    print('done writing deceased_to_date')
-    train_ids_sp.write.mode('overwrite').json(os.path.join(PATH_PROCESSED, 'spark-etl', 'train_ids.json'))
-    print('done writing train_ids')
-    test_ids_sp.write.mode('overwrite').json(os.path.join(PATH_PROCESSED, 'spark-etl', 'test_ids.json'))
-    print('done writing test_ids')
+    tf_idf_feats = pd.DataFrame.sparse.from_spmatrix(tf_idf, columns=select_cols, index=last_note.SUBJECT_ID)
+    return tf_idf_feats
 
-    diag_built_sp.write.mode('overwrite').csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'diag_built.csv'))
-    print('done writing diag_built')
-    meds_build_sp.write.mode('overwrite').csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'meds_built.csv'))
-    print('done writing meds_built')
 
-    ###
-    labs_built_sp.write.mode('overwrite').csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'labs_built.csv'))
-    print('done writing labs_built')
-    last_note_tokenized_sp.mode('overwrite').write.csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'last_note_tokenized.csv'))
-    print('done writing last_note_tokenized')
-    last_note_sp.mode('overwrite').write.csv(os.path.join(PATH_PROCESSED, 'spark-processed-features', 'last_note.csv'))
-    print('done writing last_note')
+def write_to_disk(deceased_to_date: Dict[int, dt.date], train_ids: Set[int], test_ids: Set[int], feats_to_train_on: List[pd.DataFrame], tf_idf_notes_feats: pd.DataFrame, last_note_tokenized: pd.DataFrame):
+    deceased_to_date = {k: v.isoformat() for k, v in deceased_to_date.items()}
+    with open(os.path.join(PATH_PROCESSED, 'etl', "deceased_to_date.json"), 'w') as f:
+        json.dump(deceased_to_date, f)
+
+    with open(os.path.join(PATH_PROCESSED, 'etl', "train_ids.json"), 'w') as f:
+        json.dump({'train_ids': list(train_ids)}, f)
+
+    with open(os.path.join(PATH_PROCESSED, 'etl', "test_ids.json"), 'w') as f:
+        json.dump({'test_ids': list(test_ids)}, f)
+
+    for i, feat in enumerate(feats_to_train_on):
+        feat.to_csv(os.path.join(PATH_PROCESSED, f'training_feat{i}.csv'))
+    
+    tf_idf_notes_feats.to_csv(os.path.join(PATH_PROCESSED, 'tf_idf_notes_feats.csv'))
+    last_note_tokenized.to_csv(os.path.join(PATH_PROCESSED, 'last_note_tokenized.csv'))
 
 
 def main():
@@ -455,8 +497,14 @@ def main():
     diag_built = build_feats(diag, aggs=None, train_ids=train_ids, low_thresh=30, is_diag=True)
     labs_built = build_feats(lab, aggs=['mean', 'max', 'min'], train_ids=train_ids, low_thresh=50)
 
-    _write_spark_dfs_to_disk(deceased_to_date, train_ids, test_ids, last_note_tokenized, diag_built, labs_built, meds_built, last_note)
+    # TODO above is pyspark
+    # make sparse pivoted tables
+    diag_final = pivot_aggregation(diag_built, fill_value=0)
+    labs_final = pivot_aggregation(labs_built, fill_value=0)
+    meds_final = pivot_aggregation(meds_built, fill_value=0)
 
-    # Feeds diag_built, labs_built, meds_built, last_note to preprocessing.py
-    # deceased_to_date, train_ids, test_ids, last_note_tokenized are for testing
-    return deceased_to_date, train_ids, test_ids, last_note_tokenized, diag_built, labs_built, meds_built, last_note
+    feats_to_train_on = [diag_final, meds_final, labs_final]
+    tf_idf_notes_feats = get_tf_idf_feats(last_note)
+
+    write_to_disk(deceased_to_date, train_ids, test_ids, feats_to_train_on, tf_idf_notes_feats, last_note_tokenized)
+    return deceased_to_date, train_ids, feats_to_train_on, tf_idf_notes_feats, last_note_tokenized

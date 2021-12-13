@@ -1,0 +1,46 @@
+# coding: utf-8
+with open('earliest_date_py.pickle', 'rb') as handle:
+    earliest_date_py = pickle.load(h)
+    
+import
+import pickle
+with open('earliest_date_py.pickle', 'rb') as handle:
+    earliest_date_py = pickle.load(h)
+    
+with open('earliest_date_py.pickle', 'rb') as handle:
+    earliest_date_py = pickle.load(handle)
+    
+len(earliest_date_py)
+with open('earliest_date_spark.pickle', 'rb') as handle:
+    earliest_date_sp = pickle.load(handle)
+    
+len(earliest_date_sp)
+earliest_date_py == earliest_date_sp
+earliest_date_py
+earliest_date_sp
+earliest_date_py
+from datetime import datetime
+zz = {k: datetime.fromisoformat(v) for k, v in earliest_date_sp.items()}
+zz
+earliest_date_py == earliest_date_sp
+earliest_date_py[999]
+earliest_date_sp
+earliest_date_sp[000]
+earliest_date_sp[999]
+earliest_date_py == zz
+zz[999]
+with open('last_date_py.pickle', 'rb') as handle:
+    last_date_py = pickle.load(handle)
+    
+    
+with open('last_date_spark.pickle', 'rb') as handle:
+    last_date_sp = pickle.load(handle)
+    
+    
+last_date_py
+last_date_sp
+zz2 = {k: datetime.fromisoformat(v) for k, v in last_date_sp.items()}
+zz2
+zz2[999]
+last_date_py[999]
+%save -r comparison-sesh 1-999999
