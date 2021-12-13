@@ -18,7 +18,9 @@ os.environ['PYSPARK_PYTHON'] = '~/miniconda3/envs/hc_nlp_2/bin/python'
 os.environ['PYSPARK_DRIVER_PYTHON'] = '~/miniconda3/envs/hc_nlp_2/bin/python'
 
 import pyspark.pandas as ps
-from pyspark.sql.types import StringType, FloatType, BooleanType
+import pyspark.sql.types as T
+import pyspark.sql.functions as F
+import pandas as pd
 
 
 # Input files
@@ -70,8 +72,6 @@ grp6 = [
 relevant_diag_codes: List[int] = [*acute_diag_codes, *other_resp_tract_diag_codes, *pneumonia_and_influenza_diag_codes, *grp4, *grp5, *grp6]
 RELEVANT_DIAG_CODES = [str(e) for e in relevant_diag_codes]
 
-import pyspark.sql.functions as F
-import pandas as pd
 
 
 def get_patient_sample() -> Tuple[ps.series.Series[int], ps.frame.DataFrame, ps.frame.DataFrame]:
@@ -202,7 +202,7 @@ def preprocess(patient_ids: ps.series.Series[int]) -> Tuple[ps.frame.DataFrame, 
     # renames CHARTTIME to DATE
     all_cols2 = [col for col in all_lab_results_cols if col != 'CHARTTIME']
     lab_results_sp = lab_results_sp.select(*all_cols2, F.substring('CHARTTIME', 0, 10).alias('DATE'))
-    lab_results_sp = lab_results_sp.withColumn('FEATURE_NAME', F.concat(F.lit('LAB_'), F.col('ITEMID').cast(StringType())))
+    lab_results_sp = lab_results_sp.withColumn('FEATURE_NAME', F.concat(F.lit('LAB_'), F.col('ITEMID').cast(T.StringType())))
     lab_results = lab_results_sp.to_pandas_on_spark()
     dropper = ['ROW_ID', 'HADM_ID', 'VALUE', 'VALUEUOM', 'FLAG', 'ITEMID', 'CHARTTIME']
     renamer = {'VALUENUM': 'VALUE'}
@@ -237,7 +237,7 @@ def preprocess(patient_ids: ps.series.Series[int]) -> Tuple[ps.frame.DataFrame, 
     ) AS  `{new_col}`'''.format(col='dose_arr_temp', new_col='VALUE')
     meds_sp = meds_sp.selectExpr('*', query).drop('dose_arr_temp')
 
-    meds_sp = meds_sp.withColumn('FEATURE_NAME', F.concat(F.lit('MED_'), F.col('GSN').cast(StringType())))
+    meds_sp = meds_sp.withColumn('FEATURE_NAME', F.concat(F.lit('MED_'), F.col('GSN').cast(T.StringType())))
     meds = meds_sp.to_pandas_on_spark()
 
     dropper = [col for col in meds.columns if col not in {'SUBJECT_ID', 'DATE', 'FEATURE_NAME', 'VALUE'}]
@@ -368,9 +368,9 @@ def get_last_note(patient_ids: ps.series.Series[int], notes_preprocessed: ps.fra
     return last_note
 
 
-def build_feats(df: ps.frame.DataFrame, aggs: list, train_ids: ps.frame.DataFrame = None, low_thresh: int = None) -> ps.frame.DataFrame:
+def build_feats(df: ps.frame.DataFrame, aggs: list, train_ids: ps.frame.DataFrame = None, low_thresh: int = None, is_diag: bool = False) -> ps.frame.DataFrame:
     '''Build feature aggregations for patient.
-    
+
     Args:
         agg: list of aggregations to use
         train_ids: if not empty, only features that exist in the train set 
@@ -391,6 +391,7 @@ def build_feats(df: ps.frame.DataFrame, aggs: list, train_ids: ps.frame.DataFram
         df_sp = df_sp.join(F.broadcast(train_df_sp), df_sp.FEATURE_NAME == train_df_sp.FEATURE_NAME, 'left_semi')
         df = df_sp.to_pandas_on_spark()
         ##
+
     if low_thresh is not None:
         deduplicated = df.drop_duplicates(cols_to_use)
         ##
@@ -408,13 +409,21 @@ def build_feats(df: ps.frame.DataFrame, aggs: list, train_ids: ps.frame.DataFram
         df_sp = df_sp.join(F.broadcast(features_to_leave_sp), df_sp.FEATURE_NAME == features_to_leave_sp.FEATURE_NAME, 'left_semi')
         df = df_sp.to_pandas_on_spark()
 
-    
-    grouped = df.groupby(cols_to_use).agg(aggs)
+    if is_diag == True:
+        # Diag requires custom pyspark aggregation
+        df_sp = df.to_spark()
+        grouped_sp = df_sp.groupBy(*cols_to_use).agg(
+            F.sum('VALUE').alias('TOTAL_VALUE_TMP'),
+        )
+        grouped = grouped_sp.to_pandas_on_spark()
+        grouped = grouped[grouped['TOTAL_VALUE_TMP'] > 0].drop('TOTAL_VALUE_TMP')
+    else:
+        grouped = df.groupby(cols_to_use).agg(aggs)
 
     return grouped
 
 
-def pivot_aggregation(df: ps.frame.DataFrame, fill_value: int = None, use_sparse: bool = True) -> ps.frame.DataFrame:
+def pivot_aggregation(df: ps.frame.DataFrame, fill_value: int = 0, use_sparse: bool = True) -> ps.frame.DataFrame:
     '''Make sparse pivoted table with SUBJECT_ID as index.'''
     pivoted = df.unstack()
     if fill_value is not None:
@@ -428,8 +437,6 @@ def pivot_aggregation(df: ps.frame.DataFrame, fill_value: int = None, use_sparse
 
 
 # TODO 4 cleanup for TF-IDF lemmatise, remove stopwords
-
-
 # TODO 4 need to do in spark somehow
 def get_tf_idf_feats(last_note: pd.DataFrame) -> pd.DataFrame:
     vectorizer = TfidfVectorizer(max_features=200)
@@ -484,12 +491,13 @@ def main():
     train_ids, test_ids = train_ids_sp.to_pandas_on_spark(), test_ids_sp.to_pandas_on_spark()
 
     #### Feat calculations
-    diag, lab, med = _clean_up_feature_sets(*feature_sets, date=date) # TODO need to fix
+    diag, lab, med = _clean_up_feature_sets(*feature_sets, date=date)
     meds_built = build_feats(med, aggs=['mean', 'count'], train_ids=train_ids, low_thresh=50)
-    sum_greater_than_0 = F.pandas_udf(lambda x: x.sum() > 0, BooleanType())
-    diag_built = build_feats(diag, aggs=[sum_greater_than_0], train_ids=train_ids, low_thresh=30)
+    # Diag requires custom handling
+    diag_built = build_feats(diag, aggs=None, train_ids=train_ids, low_thresh=30, is_diag=True)
     labs_built = build_feats(lab, aggs=['mean', 'max', 'min'], train_ids=train_ids, low_thresh=50)
 
+    # TODO above is pyspark
     # make sparse pivoted tables
     diag_final = pivot_aggregation(diag_built, fill_value=0)
     labs_final = pivot_aggregation(labs_built, fill_value=0)
