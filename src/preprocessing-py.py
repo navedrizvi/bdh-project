@@ -190,10 +190,18 @@ def _clean_up_feature_sets(*feature_sets: List[pd.DataFrame], earliest_date: dic
 
 # TODO 2 use spark pandas and assert content correctness
 def _prepare_text_for_tokenizer(text: str) -> str:
-    cleaned = ('. ').join(text.splitlines())
+    # convert to text blob
+    cleaned = '. '.join(text.splitlines())
+    # replace punctuation
     removed_symbols = re.sub('[\[\]\*\_#:?!]+', ' ', cleaned)
+
+    # remove spaves
     removed_spaces = re.sub(' +', ' ', removed_symbols)
+
+    # remove dots
     removed_dots = re.sub('\. \.| \.', '.', removed_spaces)
+
+    # remove duplicated dots
     removed_duplicated_dots = re.sub('\.+', '.', removed_dots)
     return removed_duplicated_dots
 
