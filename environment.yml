@@ -1,4 +1,4 @@
-name: hc_nlp_2
+name: nlp
 channels:
   - pytorch
   - defaults
@@ -15,7 +15,8 @@ dependencies:
   - transformers==4.12.5
   - tqdm
   - ipython
-  # - huggingface-hub
-  # - nbdime
-  # - jupytext
-  - mypy
+  - huggingface-hub
+  - nbdime
+  - jupytext
+  - pyspark
+  - PyArrow

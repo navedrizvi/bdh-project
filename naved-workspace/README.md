@@ -1,2 +1,0 @@
-# bdh-project
-
