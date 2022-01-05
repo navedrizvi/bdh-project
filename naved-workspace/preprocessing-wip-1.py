@@ -92,7 +92,6 @@ def _get_data_for_sample(patient_ids: ps.series.Series[int], file_name: str, ski
     '''Get the data only relevant for the sample.'''
     full_path = RAW_BASE_PATH.format(fname=file_name)
     raw = ps.read_csv(full_path)
-    # Drop rows that do not include an approved `result_name` from the Inclusion List
 
     relevant_data = raw.to_spark()
     if skip_sampling == False:
